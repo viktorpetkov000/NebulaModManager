@@ -1,0 +1,25 @@
+# Local Database & Settings
+mod_manager.db
+mod_manager_config.json
+mod_manager_config.json.bak
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# PyInstaller Build Artifacts
+build/
+dist/
+*.spec
+*.manifest
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
