@@ -198,12 +198,26 @@ class ModEngine:
             return [f"mod/{name}" for name in zip_ref.namelist() if name.endswith(".mod") and "/" not in name]
 
     def batch_download_mods(self, game, urls):
+        """Downloads mods and tracks success/failure rates."""
         target_path = self.get_mod_path(game)
         os.makedirs(target_path, exist_ok=True)
+        
+        success_count = 0
+        failed_urls = []
+        
         for i, url in enumerate(urls):
+            zip_path = os.path.join(target_path, f"temp_{i}.zip")
             try:
-                zip_path = os.path.join(target_path, f"temp_{i}.zip")
                 urllib.request.urlretrieve(url, zip_path)
-                with zipfile.ZipFile(zip_path, 'r') as z: z.extractall(target_path)
+                with zipfile.ZipFile(zip_path, 'r') as z: 
+                    z.extractall(target_path)
                 os.remove(zip_path)
-            except Exception: pass
+                success_count += 1
+            except Exception as e:
+                failed_urls.append(url)
+                # Cleanup broken partial zip if the link failed halfway
+                if os.path.exists(zip_path):
+                    try: os.remove(zip_path)
+                    except: pass
+                    
+        return success_count, failed_urls

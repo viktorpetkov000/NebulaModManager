@@ -90,7 +90,6 @@ class NebulaModManagerUI:
         ctk.CTkButton(coll_ctrl, text="From Save", width=80, fg_color="#2b8256", hover_color="#1c593a", command=self.import_from_save).pack(side="left", padx=2)
         ctk.CTkButton(coll_ctrl, text="Auto-Sort", width=80, command=self.auto_sort).pack(side="left", padx=2)
         
-        # RESTORED: Import & Export Buttons
         ctk.CTkButton(coll_ctrl, text="Import", width=60, fg_color="#3b3b3b", hover_color="#555555", command=self.import_collection).pack(side="right", padx=2)
         ctk.CTkButton(coll_ctrl, text="Export", width=60, fg_color="#3b3b3b", hover_color="#555555", command=self.export_collection).pack(side="right", padx=2)
 
@@ -112,8 +111,6 @@ class NebulaModManagerUI:
         bottom.pack(fill="x", pady=15, padx=20)
         ctk.CTkButton(bottom, text="↻ Refresh Mods", fg_color="#3b3b3b", hover_color="#555555", command=self.refresh_installed_mods).pack(side="left")
         ctk.CTkButton(bottom, text="🚀 Launch Game", font=("Segoe UI", 14, "bold"), height=40, command=self.launch_game).pack(side="right", padx=(15, 0))
-        
-        # RESTORED: Download Button
         ctk.CTkButton(bottom, text="⬇ Download New Mod(s)", height=40, fg_color="#3b3b3b", hover_color="#555555", command=self.open_download_dialog).pack(side="right")
 
     # --- UI EVENT LOGIC ---
@@ -270,7 +267,7 @@ class NebulaModManagerUI:
             if os.path.exists(data["content_path"]): shutil.rmtree(data["content_path"]) if os.path.isdir(data["content_path"]) else os.remove(data["content_path"])
             self.refresh_installed_mods()
 
-    # --- RESTORED: MOD TOOLS ---
+    # --- MOD TOOLS & OPTIONS ---
     def open_tools_menu(self):
         tools_win = ctk.CTkToplevel(self.root)
         tools_win.title("Mod Toolkit")
@@ -321,13 +318,11 @@ class NebulaModManagerUI:
         messagebox.showinfo("Merging", "Merge started. This may take a while.")
         threading.Thread(target=task, daemon=True).start()
 
-    # --- RESTORED: OPTIONS (EXE PATHS) ---
     def open_options(self):
         opt_win = ctk.CTkToplevel(self.root)
         opt_win.geometry("750x400")
         opt_win.title("Settings")
         opt_win.attributes("-topmost", True)
-
         def create_row(label, key, is_dir=True):
             f = ctk.CTkFrame(opt_win, fg_color="transparent")
             f.pack(fill="x", pady=8, padx=20)
@@ -363,7 +358,7 @@ class NebulaModManagerUI:
         ctk.CTkButton(btn_f, text="Restore Defaults", fg_color="#3b3b3b", hover_color="#555555", command=restore).pack(side="left")
         ctk.CTkButton(btn_f, text="Close", command=opt_win.destroy).pack(side="right")
 
-    # --- RESTORED: IMPORT / EXPORT ---
+    # --- EXPORT / IMPORT / DOWNLOADS ---
     def export_collection(self):
         game, coll = self.game_var.get(), self.current_collection_var.get()
         if not coll: return
@@ -399,7 +394,6 @@ class NebulaModManagerUI:
         self.current_collection_var.set(coll_name)
         self.refresh_collection_view()
 
-    # --- RESTORED: DOWNLOADS ---
     def open_download_dialog(self):
         dl_win = ctk.CTkToplevel(self.root)
         dl_win.geometry("550x380")
@@ -416,9 +410,22 @@ class NebulaModManagerUI:
             if not urls: return
             btn.configure(state="disabled", text="Downloading...")
             def task():
-                self.engine.batch_download_mods(self.game_var.get(), urls)
+                success_count, failed_urls = self.engine.batch_download_mods(self.game_var.get(), urls)
                 self.root.after(0, lambda: dl_win.destroy())
                 self.root.after(0, self.refresh_installed_mods)
-                self.root.after(0, lambda: messagebox.showinfo("Done", "Downloads finished!"))
+                
+                # BUG FIX: Smart error reporting for broken links
+                def show_result():
+                    if failed_urls:
+                        if success_count == 0:
+                            messagebox.showerror("Download Failed", "Failed to download any mods. Check your links and internet connection.")
+                        else:
+                            error_msg = f"Successfully downloaded {success_count} mods.\n\nFailed to download {len(failed_urls)} mods:\n" + "\n".join(failed_urls)
+                            messagebox.showwarning("Partial Success", error_msg)
+                    else:
+                        messagebox.showinfo("Done", f"Successfully downloaded {success_count} mods!")
+                
+                self.root.after(0, show_result)
+                
             threading.Thread(target=task, daemon=True).start()
         btn.configure(command=run)
