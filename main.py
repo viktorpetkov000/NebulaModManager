@@ -1,7 +1,7 @@
 import customtkinter as ctk
 from database import DatabaseManager
 from mod_engine import ModEngine
-from gui import NebulaModManagerUI
+from gui import NebulaModManager
 
 if __name__ == "__main__":
     # Initialize the App Theme
@@ -14,7 +14,7 @@ if __name__ == "__main__":
     engine = ModEngine(db)
     
     # Inject Model and Controller into the View
-    app = NebulaModManagerUI(root, db, engine)
+    app = NebulaModManager(root, db, engine)
     
     # Start Program
     root.mainloop()

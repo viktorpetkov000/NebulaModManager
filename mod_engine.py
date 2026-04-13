@@ -7,16 +7,19 @@ import subprocess
 import urllib.request
 import concurrent.futures
 from collections import defaultdict
+from database import GAMES_MAP
 
 class ModEngine:
     def __init__(self, db):
         self.db = db
 
     def get_mod_path(self, game):
-        return self.db.get_setting("stellaris_mod_path") if game == "Stellaris" else self.db.get_setting("hoi4_mod_path")
+        game_id = GAMES_MAP.get(game, {}).get("id", "")
+        return self.db.get_setting(f"{game_id}_mod_path")
 
     def get_exe_path(self, game):
-        return self.db.get_setting("stellaris_exe_path") if game == "Stellaris" else self.db.get_setting("hoi4_exe_path")
+        game_id = GAMES_MAP.get(game, {}).get("id", "")
+        return self.db.get_setting(f"{game_id}_exe_path")
 
     # --- AUTO-REPAIR ---
     def auto_generate_root_mods(self, target_path):
@@ -198,7 +201,6 @@ class ModEngine:
             return [f"mod/{name}" for name in zip_ref.namelist() if name.endswith(".mod") and "/" not in name]
 
     def batch_download_mods(self, game, urls):
-        """Downloads mods and tracks success/failure rates."""
         target_path = self.get_mod_path(game)
         os.makedirs(target_path, exist_ok=True)
         
@@ -215,7 +217,6 @@ class ModEngine:
                 success_count += 1
             except Exception as e:
                 failed_urls.append(url)
-                # Cleanup broken partial zip if the link failed halfway
                 if os.path.exists(zip_path):
                     try: os.remove(zip_path)
                     except: pass

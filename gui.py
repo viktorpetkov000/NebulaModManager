@@ -4,8 +4,9 @@ import customtkinter as ctk
 import threading
 import os
 import shutil
+from database import GAMES_MAP
 
-class NebulaModManagerUI:
+class NebulaModManager:
     def __init__(self, root, db, engine):
         self.root = root
         self.db = db
@@ -36,8 +37,10 @@ class NebulaModManagerUI:
         top_frame.pack(fill="x", pady=15, padx=20)
 
         ctk.CTkLabel(top_frame, text="Game:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=(0, 10))
-        self.game_var = ctk.StringVar(value="Stellaris")
-        ctk.CTkOptionMenu(top_frame, variable=self.game_var, values=["Stellaris", "Hearts of Iron IV"], command=self.on_game_switch, width=200).pack(side="left")
+        
+        game_list = list(GAMES_MAP.keys())
+        self.game_var = ctk.StringVar(value=game_list[0])
+        ctk.CTkOptionMenu(top_frame, variable=self.game_var, values=game_list, command=self.on_game_switch, width=250).pack(side="left")
 
         ctk.CTkButton(top_frame, text="⚙ Options", fg_color="#3b3b3b", hover_color="#555555", command=self.open_options).pack(side="right")
         ctk.CTkButton(top_frame, text="🛠 Mod Tools", fg_color="#b53b3b", hover_color="#8c2e2e", command=self.open_tools_menu).pack(side="right", padx=10)
@@ -320,16 +323,24 @@ class NebulaModManagerUI:
 
     def open_options(self):
         opt_win = ctk.CTkToplevel(self.root)
-        opt_win.geometry("750x400")
+        opt_win.geometry("850x650")
         opt_win.title("Settings")
         opt_win.attributes("-topmost", True)
-        def create_row(label, key, is_dir=True):
-            f = ctk.CTkFrame(opt_win, fg_color="transparent")
-            f.pack(fill="x", pady=8, padx=20)
-            ctk.CTkLabel(f, text=label, width=150, anchor="w").pack(side="left")
-            e = ctk.CTkEntry(f, width=400)
+
+        ctk.CTkLabel(opt_win, text="Application Paths", font=("Segoe UI", 18, "bold")).pack(pady=(15, 10))
+
+        # Replaced static list with dynamic ScrollableFrame to support all games
+        scroll_frame = ctk.CTkScrollableFrame(opt_win, width=800, height=500)
+        scroll_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        def create_row(parent, label, key, is_dir=True):
+            f = ctk.CTkFrame(parent, fg_color="transparent")
+            f.pack(fill="x", pady=5, padx=10)
+            ctk.CTkLabel(f, text=label, width=100, anchor="w").pack(side="left")
+            e = ctk.CTkEntry(f, width=500)
             e.insert(0, self.db.get_setting(key))
-            e.pack(side="left", padx=(0, 10))
+            e.configure(state="readonly")
+            e.pack(side="left", padx=(10, 10))
             def browse():
                 path = filedialog.askdirectory() if is_dir else filedialog.askopenfilename(filetypes=[("Executable", "*.exe")])
                 if path:
@@ -337,25 +348,26 @@ class NebulaModManagerUI:
                     opt_win.destroy()
                     self.open_options()
             ctk.CTkButton(f, text="Browse", width=80, command=browse).pack(side="left")
-        
-        ctk.CTkLabel(opt_win, text="Application Paths", font=("Segoe UI", 16, "bold")).pack(pady=(15, 10))
-        create_row("Stellaris Mod Folder:", "stellaris_mod_path")
-        create_row("HOI4 Mod Folder:", "hoi4_mod_path")
-        create_row("Stellaris Executable:", "stellaris_exe_path", False)
-        create_row("HOI4 Executable:", "hoi4_exe_path", False)
+
+        # Generate paths for every game mapped in the database
+        for game_name, game_data in GAMES_MAP.items():
+            game_id = game_data["id"]
+            lbl = ctk.CTkLabel(scroll_frame, text=game_name, font=("Segoe UI", 14, "bold"), text_color="#1f538d")
+            lbl.pack(anchor="w", pady=(15, 5), padx=10)
+            create_row(scroll_frame, "Mod Folder:", f"{game_id}_mod_path", True)
+            create_row(scroll_frame, "Executable:", f"{game_id}_exe_path", False)
 
         def restore():
-            user = os.path.expanduser('~')
-            self.db.set_setting("stellaris_mod_path", os.path.join(user, "Documents", "Paradox Interactive", "Stellaris", "mod"))
-            self.db.set_setting("hoi4_mod_path", os.path.join(user, "Documents", "Paradox Interactive", "Hearts of Iron IV", "mod"))
-            self.db.set_setting("stellaris_exe_path", r"C:\Program Files (x86)\Steam\steamapps\common\Stellaris\stellaris.exe")
-            self.db.set_setting("hoi4_exe_path", r"C:\Program Files (x86)\Steam\steamapps\common\Hearts of Iron IV\hoi4.exe")
+            for game_name, game_data in GAMES_MAP.items():
+                game_id = game_data["id"]
+                self.db.set_setting(f"{game_id}_mod_path", game_data["default_mod"])
+                self.db.set_setting(f"{game_id}_exe_path", game_data["default_exe"])
             opt_win.destroy()
             self.open_options()
 
         btn_f = ctk.CTkFrame(opt_win, fg_color="transparent")
-        btn_f.pack(fill="x", pady=20, padx=20)
-        ctk.CTkButton(btn_f, text="Restore Defaults", fg_color="#3b3b3b", hover_color="#555555", command=restore).pack(side="left")
+        btn_f.pack(fill="x", pady=10, padx=20)
+        ctk.CTkButton(btn_f, text="Restore All Defaults", fg_color="#3b3b3b", hover_color="#555555", command=restore).pack(side="left")
         ctk.CTkButton(btn_f, text="Close", command=opt_win.destroy).pack(side="right")
 
     # --- EXPORT / IMPORT / DOWNLOADS ---
@@ -414,7 +426,6 @@ class NebulaModManagerUI:
                 self.root.after(0, lambda: dl_win.destroy())
                 self.root.after(0, self.refresh_installed_mods)
                 
-                # BUG FIX: Smart error reporting for broken links
                 def show_result():
                     if failed_urls:
                         if success_count == 0:

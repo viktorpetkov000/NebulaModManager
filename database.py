@@ -2,6 +2,48 @@ import sqlite3
 import os
 import json
 
+USER_HOME = os.path.expanduser('~')
+
+# --- DYNAMIC GAMES CONFIGURATION ---
+# To add a new game in the future, simply add it to this dictionary!
+GAMES_MAP = {
+    "Stellaris": {
+        "id": "stellaris",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Stellaris", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Stellaris\stellaris.exe"
+    },
+    "Hearts of Iron IV": {
+        "id": "hoi4",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Hearts of Iron IV", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Hearts of Iron IV\hoi4.exe"
+    },
+    "Crusader Kings III": {
+        "id": "ck3",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Crusader Kings III", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings III\binaries\ck3.exe"
+    },
+    "Europa Universalis IV": {
+        "id": "eu4",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Europa Universalis IV", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Europa Universalis IV\eu4.exe"
+    },
+    "Victoria 3": {
+        "id": "vic3",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Victoria 3", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Victoria 3\binaries\victoria3.exe"
+    },
+    "Imperator: Rome": {
+        "id": "ir",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Imperator", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\ImperatorRome\binaries\imperator.exe"
+    },
+    "Crusader Kings II": {
+        "id": "ck2",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Crusader Kings II", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings II\ck2.exe"
+    }
+}
+
 class DatabaseManager:
     def __init__(self, db_file="mod_manager.db"):
         self.db_conn = sqlite3.connect(db_file, check_same_thread=False)
@@ -19,18 +61,12 @@ class DatabaseManager:
             );
         ''')
         
-        user_home = os.path.expanduser('~')
-        defaults = {
-            "stellaris_mod_path": os.path.join(user_home, "Documents", "Paradox Interactive", "Stellaris", "mod"),
-            "hoi4_mod_path": os.path.join(user_home, "Documents", "Paradox Interactive", "Hearts of Iron IV", "mod"),
-            "stellaris_exe_path": r"C:\Program Files (x86)\Steam\steamapps\common\Stellaris\stellaris.exe",
-            "hoi4_exe_path": r"C:\Program Files (x86)\Steam\steamapps\common\Hearts of Iron IV\hoi4.exe"
-        }
-        for k, v in defaults.items():
-            self.cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+        # Populate DB with all default paths and standard collections
+        for game_name, game_data in GAMES_MAP.items():
+            self.cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"{game_data['id']}_mod_path", game_data['default_mod']))
+            self.cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"{game_data['id']}_exe_path", game_data['default_exe']))
+            self.cursor.execute("INSERT OR IGNORE INTO collections (game, name) VALUES (?, 'Default')", (game_name,))
             
-        self.cursor.execute("INSERT OR IGNORE INTO collections (game, name) VALUES ('Stellaris', 'Default')")
-        self.cursor.execute("INSERT OR IGNORE INTO collections (game, name) VALUES ('Hearts of Iron IV', 'Default')")
         self.db_conn.commit()
         self.migrate_old_json()
 
