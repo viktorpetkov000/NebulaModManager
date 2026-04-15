@@ -17,6 +17,7 @@ class NebulaModManager:
         self.root.minsize(1000, 600)
         
         self.installed_mods_data = {}
+        self.mod_warnings = {} # Stores health check warnings
         self.drag_data = None
 
         self.apply_treeview_styles()
@@ -31,6 +32,10 @@ class NebulaModManager:
         style.map("Treeview", background=[("selected", "#1f538d")])
         style.configure("Treeview.Heading", background="#3b3b3b", foreground="#ffffff", relief="flat", font=("Segoe UI", 10, "bold"))
         style.map("Treeview.Heading", background=[("active", "#1f538d")])
+        
+        # Configure colors for mods with warnings
+        self.collection_tree = ttk.Treeview() # Dummy init for style mapping
+        self.collection_tree.tag_configure("warning", foreground="#e2b714")
 
     def build_ui(self):
         top_frame = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -39,14 +44,8 @@ class NebulaModManager:
         ctk.CTkLabel(top_frame, text="Game:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=(0, 10))
         
         game_list = list(GAMES_MAP.keys())
-        
-        # Load the last selected game, or default to the first one
         last_game = self.db.get_setting("last_game")
-        if last_game in game_list:
-            self.game_var = ctk.StringVar(value=last_game)
-        else:
-            self.game_var = ctk.StringVar(value=game_list[0])
-            
+        self.game_var = ctk.StringVar(value=last_game if last_game in game_list else game_list[0])
         ctk.CTkOptionMenu(top_frame, variable=self.game_var, values=game_list, command=self.on_game_switch, width=250).pack(side="left")
 
         ctk.CTkButton(top_frame, text="⚙ Options", fg_color="#3b3b3b", hover_color="#555555", command=self.open_options).pack(side="right")
@@ -103,6 +102,8 @@ class NebulaModManager:
         ctk.CTkButton(coll_ctrl, text="Import", width=60, fg_color="#3b3b3b", hover_color="#555555", command=self.import_collection).pack(side="right", padx=2)
         ctk.CTkButton(coll_ctrl, text="Export", width=60, fg_color="#3b3b3b", hover_color="#555555", command=self.export_collection).pack(side="right", padx=2)
 
+        ctk.CTkLabel(right_pane, text="⚠️ Double-click mods with yellow warnings for details", font=("Segoe UI", 11, "italic"), text_color="#a3a3a3").pack(anchor="e", padx=10)
+
         self.collection_tree = ttk.Treeview(right_pane, columns=("Order", "Mod Name", "Version"), show="headings")
         self.collection_tree.heading("Order", text="#")
         self.collection_tree.heading("Mod Name", text="Active Collection")
@@ -112,9 +113,13 @@ class NebulaModManager:
         self.collection_tree.column("Version", width=60, anchor="center")
         self.collection_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
+        # Re-apply tags specifically to this specific Treeview instance
+        self.collection_tree.tag_configure("warning", foreground="#e2b714")
+
         self.collection_tree.bind("<ButtonPress-1>", self.on_drag_start)
         self.collection_tree.bind("<B1-Motion>", self.on_drag_motion)
         self.collection_tree.bind("<ButtonRelease-1>", self.on_drag_release)
+        self.collection_tree.bind("<Double-1>", self.show_mod_warnings) # Hook for Health Check Popups
 
         # BOTTOM PANE
         bottom = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -159,6 +164,15 @@ class NebulaModManager:
         self.db.set_setting(f"last_collection_{self.game_var.get()}", choice)
         self.refresh_collection_view()
 
+    def show_mod_warnings(self, event):
+        """Displays the popup with exact dependency/version errors."""
+        selected = self.collection_tree.selection()
+        if not selected: return
+        rel_path = selected[0]
+        if rel_path in self.mod_warnings:
+            msg = "\n\n".join(self.mod_warnings[rel_path])
+            messagebox.showwarning("Mod Health Check", f"⚠️ Issues detected for this mod:\n\n{msg}")
+
     # --- REFRESH VIEWS ---
     def refresh_installed_mods(self):
         for item in self.installed_tree.get_children(): self.installed_tree.delete(item)
@@ -180,9 +194,46 @@ class NebulaModManager:
         game, coll = self.game_var.get(), self.current_collection_var.get()
         if not coll: return
         
-        for index, rel_path in enumerate(self.db.get_collection_mods(game, coll)):
+        mod_list = self.db.get_collection_mods(game, coll)
+        game_ver = self.engine.get_game_version(game)
+        self.mod_warnings = {}
+        
+        # Build lookup table to verify dependencies and load order
+        active_names = {self.installed_mods_data.get(p, {}).get("name", ""): idx for idx, p in enumerate(mod_list)}
+        
+        for index, rel_path in enumerate(mod_list):
             data = self.installed_mods_data.get(rel_path)
-            if data: self.collection_tree.insert("", "end", iid=rel_path, values=(str(index+1), data["name"], data["version"]))
+            if not data: 
+                self.collection_tree.insert("", "end", iid=rel_path, values=(str(index+1), f"[Missing] {rel_path}", "N/A"))
+                continue
+                
+            warnings = []
+            
+            # 1. Version Mismatch Scanning
+            mod_ver = data.get("version", "Any")
+            if game_ver and mod_ver not in ["*", "Any", ""] and game_ver != "Unknown":
+                g_parts = game_ver.split('.')[:2]
+                m_parts = mod_ver.split('.')[:2]
+                if g_parts != m_parts:
+                    if not (len(m_parts) == 2 and m_parts[1] == "*" and m_parts[0] == g_parts[0]):
+                        warnings.append(f"Game is v{game_ver}, but mod is built for v{mod_ver}.")
+            
+            # 2. Dependency & Load Order Checking
+            for dep in data.get("dependencies", []):
+                if dep not in active_names:
+                    warnings.append(f"Missing dependency: '{dep}' is not in this collection.")
+                elif active_names[dep] > index:
+                    warnings.append(f"Load Order Error: '{dep}' must be loaded BEFORE this mod.")
+                    
+            display_name = data["name"]
+            tag = ""
+            
+            if warnings:
+                self.mod_warnings[rel_path] = warnings
+                display_name = f"⚠️ {display_name}"
+                tag = "warning"
+                
+            self.collection_tree.insert("", "end", iid=rel_path, values=(str(index+1), display_name, mod_ver), tags=(tag,))
 
     # --- DB COLLECTION INTERACTIONS ---
     def update_collection_dropdown(self):
@@ -190,13 +241,9 @@ class NebulaModManager:
         colls = self.db.get_collections_list(game)
         self.collection_combo.configure(values=colls if colls else [""])
         
-        # Load the last collection for this specific game
         last_coll = self.db.get_setting(f"last_collection_{game}")
-        if last_coll and last_coll in colls:
-            self.current_collection_var.set(last_coll)
-        else:
-            self.current_collection_var.set(colls[0] if colls else "")
-            
+        if last_coll and last_coll in colls: self.current_collection_var.set(last_coll)
+        else: self.current_collection_var.set(colls[0] if colls else "")
         self.refresh_collection_view()
 
     def create_collection(self):
@@ -333,11 +380,11 @@ class NebulaModManager:
         def task():
             try:
                 self.engine.merge_mega_mod(game, coll, merged_name, self.installed_mods_data)
-                self.root.after(0, lambda: messagebox.showinfo("Success", f"Created Mega-Mod: '{merged_name}'!"))
+                self.root.after(0, lambda: messagebox.showinfo("Success", f"Created Mega-Mod: '{merged_name}'!\nSmart Merge Algorithm Applied."))
                 self.root.after(0, self.refresh_installed_mods)
             except Exception as e: self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
 
-        messagebox.showinfo("Merging", "Merge started. This may take a while.")
+        messagebox.showinfo("Merging", "Merge started. This may take a while depending on collection size.")
         threading.Thread(target=task, daemon=True).start()
 
     def open_options(self):
@@ -345,10 +392,8 @@ class NebulaModManager:
         opt_win.geometry("850x650")
         opt_win.title("Settings")
         opt_win.attributes("-topmost", True)
-
         ctk.CTkLabel(opt_win, text="Application Paths", font=("Segoe UI", 18, "bold")).pack(pady=(15, 10))
 
-        # Replaced static list with dynamic ScrollableFrame to support all games
         scroll_frame = ctk.CTkScrollableFrame(opt_win, width=800, height=500)
         scroll_frame.pack(pady=10, padx=20, fill="both", expand=True)
 
@@ -368,7 +413,6 @@ class NebulaModManager:
                     self.open_options()
             ctk.CTkButton(f, text="Browse", width=80, command=browse).pack(side="left")
 
-        # Generate paths for every game mapped in the database
         for game_name, game_data in GAMES_MAP.items():
             game_id = game_data["id"]
             lbl = ctk.CTkLabel(scroll_frame, text=game_name, font=("Segoe UI", 14, "bold"), text_color="#1f538d")
@@ -449,7 +493,7 @@ class NebulaModManager:
                 def show_result():
                     if failed_urls:
                         if success_count == 0:
-                            messagebox.showerror("Download Failed", "Failed to download any mods. Check your links and internet connection.")
+                            messagebox.showerror("Download Failed", "Failed to download any mods. Check your links.")
                         else:
                             error_msg = f"Successfully downloaded {success_count} mods.\n\nFailed to download {len(failed_urls)} mods:\n" + "\n".join(failed_urls)
                             messagebox.showwarning("Partial Success", error_msg)

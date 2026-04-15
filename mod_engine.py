@@ -21,6 +21,25 @@ class ModEngine:
         game_id = GAMES_MAP.get(game, {}).get("id", "")
         return self.db.get_setting(f"{game_id}_exe_path")
 
+    def get_game_version(self, game):
+        """Scans the game's directory to determine the exact version installed."""
+        exe_path = self.get_exe_path(game)
+        if not exe_path or not os.path.exists(exe_path): return None
+        
+        base_dir = os.path.dirname(exe_path)
+        settings_path = os.path.join(base_dir, "launcher-settings.json")
+        
+        # Some games (like CK3) keep the exe in a /binaries/ folder, so we check one level up
+        if not os.path.exists(settings_path):
+            settings_path = os.path.join(os.path.dirname(base_dir), "launcher-settings.json")
+            
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    return json.load(f).get("version")
+            except Exception: pass
+        return None
+
     # --- AUTO-REPAIR ---
     def auto_generate_root_mods(self, target_path):
         if not os.path.exists(target_path): return
@@ -70,15 +89,24 @@ class ModEngine:
 
     # --- PARSING & SCANNING ---
     def parse_mod_file(self, mod_file_path, rel_path, game_base_dir):
-        name, version, content_relative_path = "Unknown Mod", "Any", ""
+        name, version, content_relative_path, dependencies = "Unknown Mod", "Any", "", []
         try:
             with open(mod_file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
+                content = f.read()
+                
+                # Extract basic data
+                for line in content.split('\n'):
                     if line.strip().startswith('name='): name = line.split('=', 1)[1].strip().strip('\"')
                     elif line.strip().startswith('supported_version='): version = line.split('=', 1)[1].strip().strip('\"')
                     elif line.strip().startswith('path=') or line.strip().startswith('archive='): content_relative_path = line.split('=', 1)[1].strip().strip('\"')
+                
+                # Extract dependencies robustly
+                dep_match = re.search(r'dependencies\s*=\s*\{\s*([^}]+)\s*\}', content)
+                if dep_match:
+                    dependencies = re.findall(r'"([^"]*)"', dep_match.group(1))
+
             mod_content_path = os.path.join(game_base_dir, content_relative_path.replace('/', os.sep)) if content_relative_path else None
-            return rel_path, {"name": name, "version": version, "file_path": mod_file_path, "content_path": mod_content_path}
+            return rel_path, {"name": name, "version": version, "file_path": mod_file_path, "content_path": mod_content_path, "dependencies": dependencies}
         except Exception: return rel_path, None
 
     def scan_installed_mods(self, game):
@@ -114,7 +142,7 @@ class ModEngine:
         if os.path.exists(exe_path) and exe_path.endswith(".exe"): subprocess.Popen([exe_path])
         else: raise Exception("Game executable not found.")
 
-    # --- MOD TOOLS ---
+    # --- MOD TOOLS (WITH SMART MERGE) ---
     def find_conflicts(self, active_mods_data):
         file_map = defaultdict(list)
         for data in active_mods_data:
@@ -164,18 +192,48 @@ class ModEngine:
         if os.path.exists(merged_folder): raise Exception(f"A mod folder named '{merged_name}' already exists.")
 
         os.makedirs(merged_folder, exist_ok=True)
-        for rel_path in mod_list:
-            data = installed_data.get(rel_path)
-            if not data or not data["content_path"] or not os.path.exists(data["content_path"]): continue
-            content_path = data["content_path"]
-            try:
-                if os.path.isdir(content_path): shutil.copytree(content_path, merged_folder, dirs_exist_ok=True)
-                elif zipfile.is_zipfile(content_path):
-                    with zipfile.ZipFile(content_path, 'r') as z: z.extractall(merged_folder)
-            except Exception as e: print(f"Error merging: {e}")
-
-        mod_content = f'version="1.0"\ntags={{\n\t"MegaMod"\n}}\nname="{merged_name}"\nsupported_version="*"\npath="mod/{merged_name}"\n'
-        with open(merged_mod_file, "w") as f: f.write(mod_content)
+        temp_dir = os.path.join(target_path, f"{merged_name}_temp")
+        
+        try:
+            for rel_path in mod_list:
+                data = installed_data.get(rel_path)
+                if not data or not data["content_path"] or not os.path.exists(data["content_path"]): continue
+                
+                content_path = data["content_path"]
+                mod_name = data["name"]
+                
+                if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                try:
+                    if os.path.isdir(content_path): shutil.copytree(content_path, temp_dir, dirs_exist_ok=True)
+                    elif zipfile.is_zipfile(content_path):
+                        with zipfile.ZipFile(content_path, 'r') as z: z.extractall(temp_dir)
+                    
+                    for root_dir, _, files in os.walk(temp_dir):
+                        for file in files:
+                            if file in ["descriptor.mod", "thumbnail.png"]: continue
+                            
+                            src_file = os.path.join(root_dir, file)
+                            rel_file = os.path.relpath(src_file, temp_dir)
+                            dst_file = os.path.join(merged_folder, rel_file)
+                            
+                            os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+                            
+                            # THE HOLY GRAIL: Smart Text Merging Algorithm
+                            if os.path.exists(dst_file) and file.endswith(('.txt', '.yml', '.gui', '.csv')):
+                                with open(dst_file, 'a', encoding='utf-8', errors='ignore') as df:
+                                    df.write(f"\n\n# --- NEBULA SMART MERGE: Appended from {mod_name} ---\n")
+                                    with open(src_file, 'r', encoding='utf-8', errors='ignore') as sf:
+                                        df.write(sf.read())
+                            else:
+                                shutil.copy2(src_file, dst_file)
+                except Exception as e: print(f"Error merging {mod_name}: {e}")
+                
+            mod_content = f'version="1.0"\ntags={{\n\t"MegaMod"\n}}\nname="{merged_name}"\nsupported_version="*"\npath="mod/{merged_name}"\n'
+            with open(merged_mod_file, "w") as f: f.write(mod_content)
+        finally:
+            if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
 
     # --- IMPORT / EXPORT / DOWNLOAD ---
     def export_collection_zip(self, game, coll_name, installed_data, save_path):
@@ -203,7 +261,6 @@ class ModEngine:
     def batch_download_mods(self, game, urls):
         target_path = self.get_mod_path(game)
         os.makedirs(target_path, exist_ok=True)
-        
         success_count = 0
         failed_urls = []
         
@@ -211,8 +268,7 @@ class ModEngine:
             zip_path = os.path.join(target_path, f"temp_{i}.zip")
             try:
                 urllib.request.urlretrieve(url, zip_path)
-                with zipfile.ZipFile(zip_path, 'r') as z: 
-                    z.extractall(target_path)
+                with zipfile.ZipFile(zip_path, 'r') as z: z.extractall(target_path)
                 os.remove(zip_path)
                 success_count += 1
             except Exception as e:
@@ -220,5 +276,4 @@ class ModEngine:
                 if os.path.exists(zip_path):
                     try: os.remove(zip_path)
                     except: pass
-                    
         return success_count, failed_urls
