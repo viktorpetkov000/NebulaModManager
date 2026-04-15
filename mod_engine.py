@@ -258,6 +258,20 @@ class ModEngine:
             zip_ref.extractall(target_path)
             return [f"mod/{name}" for name in zip_ref.namelist() if name.endswith(".mod") and "/" not in name]
 
+    def backup_saves_zip(self, game, save_path):
+        """Finds the save games folder for the current game and archives it."""
+        target_path = self.get_mod_path(game)
+        save_dir = os.path.join(os.path.dirname(target_path), "save games")
+        if not os.path.exists(save_dir):
+            raise Exception("Save games folder not found.")
+            
+        with zipfile.ZipFile(save_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, _, files in os.walk(save_dir):
+                for file in files:
+                    abs_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(abs_path, save_dir)
+                    zipf.write(abs_path, rel_path)
+
     def batch_download_mods(self, game, urls):
         target_path = self.get_mod_path(game)
         os.makedirs(target_path, exist_ok=True)

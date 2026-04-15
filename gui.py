@@ -4,7 +4,11 @@ import customtkinter as ctk
 import threading
 import os
 import shutil
-from PIL import Image
+from PIL import Image, ImageDraw
+try:
+    import pystray
+except ImportError:
+    pystray = None
 from database import GAMES_MAP
 
 class NebulaModManager:
@@ -21,6 +25,11 @@ class NebulaModManager:
         self.mod_warnings = {} # Stores health check warnings
         self.drag_data = None
         self.current_thumbnail = None # Prevents garbage collection of the displayed image
+
+        # System Tray Integration
+        self.icon = None
+        if pystray:
+            self.root.protocol('WM_DELETE_WINDOW', self.hide_window)
 
         self.apply_treeview_styles()
         self.build_ui()
@@ -192,6 +201,41 @@ class NebulaModManager:
     def on_collection_switch(self, choice):
         self.db.set_setting(f"last_collection_{self.game_var.get()}", choice)
         self.refresh_collection_view()
+
+    def hide_window(self):
+        """Hides the main window and generates the System Tray Icon."""
+        self.root.withdraw()
+        
+        # Generate a clean, modern geometric icon dynamically
+        image = Image.new('RGB', (64, 64), color=(31, 83, 141))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((16, 16, 48, 48), fill="white")
+        draw.rectangle((24, 24, 40, 40), fill=(181, 59, 59))
+
+        def on_show(icon, item):
+            icon.stop()
+            self.root.after(0, self.root.deiconify)
+
+        def on_quit(icon, item):
+            icon.stop()
+            self.root.after(0, self.root.destroy)
+
+        def make_launch_callback(g, c):
+            return lambda icon, item: self.root.after(0, lambda: self.engine.launch_game(g, c))
+
+        # Add default=True to the Show Nebula action to trigger it on double-click
+        menu_items = [pystray.MenuItem("Show Nebula", on_show, default=True), pystray.Menu.SEPARATOR]
+
+        for g in GAMES_MAP.keys():
+            colls = self.db.get_collections_list(g)
+            if colls:
+                sub_menu = pystray.Menu(*[pystray.MenuItem(c, make_launch_callback(g, c)) for c in colls])
+                menu_items.append(pystray.MenuItem(f"Launch {g}", sub_menu))
+
+        menu_items.extend([pystray.Menu.SEPARATOR, pystray.MenuItem("Quit", on_quit)])
+        
+        self.icon = pystray.Icon("Nebula", image, "Nebula Mod Manager", menu=pystray.Menu(*menu_items))
+        threading.Thread(target=self.icon.run, daemon=True).start()
 
     def show_mod_warnings(self, event):
         """Displays the popup with exact dependency/version errors."""
@@ -398,6 +442,16 @@ class NebulaModManager:
             with zipfile.ZipFile(save_path, 'r') as z:
                 mods_found = re.findall(r'"(mod/[^"]+\.mod)"', z.read('meta').decode('utf-8', errors='ignore')) if 'meta' in z.namelist() else []
             if mods_found:
+                # NEW: Missing Mod Save Rescue feature
+                missing_mods = [m for m in mods_found if m not in self.installed_mods_data]
+                if missing_mods:
+                    msg = "⚠️ The following mods required by this save are missing from your installation:\n\n"
+                    msg += "\n".join(missing_mods[:10])
+                    if len(missing_mods) > 10: msg += f"\n...and {len(missing_mods)-10} more."
+                    msg += "\n\nDo you still want to import the rest of the collection?"
+                    if not messagebox.askyesno("Missing Mods Detected", msg):
+                        return
+                        
                 coll_name = simpledialog.askstring("Import", "Enter new collection name:")
                 if coll_name:
                     self.db.create_collection(self.game_var.get(), coll_name)
@@ -430,11 +484,27 @@ class NebulaModManager:
     def open_tools_menu(self):
         tools_win = ctk.CTkToplevel(self.root)
         tools_win.title("Mod Toolkit")
-        tools_win.geometry("450x300")
+        tools_win.geometry("450x380")
         tools_win.attributes("-topmost", True)
         ctk.CTkButton(tools_win, text="🧹 Clean Orphaned Files", height=45, command=self.tool_clean).pack(fill="x", padx=40, pady=10)
         ctk.CTkButton(tools_win, text="⚠️ Detect Conflicts", height=45, command=self.tool_conflicts).pack(fill="x", padx=40, pady=10)
         ctk.CTkButton(tools_win, text="📦 Merge into Mega-Mod", fg_color="#1f538d", hover_color="#14375e", height=45, command=self.tool_merge).pack(fill="x", padx=40, pady=10)
+        ctk.CTkButton(tools_win, text="💾 Backup Save Games", fg_color="#2b8256", hover_color="#1c593a", height=45, command=self.tool_backup_saves).pack(fill="x", padx=40, pady=10)
+
+    def tool_backup_saves(self):
+        game = self.game_var.get()
+        save_path = filedialog.asksaveasfilename(defaultextension=".zip", initialfile=f"{game}_Saves_Backup.zip", filetypes=[("Zip", "*.zip")])
+        if not save_path: return
+        
+        def task():
+            try:
+                self.engine.backup_saves_zip(game, save_path)
+                self.root.after(0, lambda: messagebox.showinfo("Success", "All saves backed up successfully!"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Backup Failed", str(e)))
+                
+        messagebox.showinfo("Backing Up", "Started zipping save games in background. This may take a moment depending on the size.")
+        threading.Thread(target=task, daemon=True).start()
 
     def tool_clean(self):
         orphans = self.engine.clean_junk(self.game_var.get())
