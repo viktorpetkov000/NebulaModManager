@@ -4,6 +4,7 @@ import customtkinter as ctk
 import threading
 import os
 import shutil
+from PIL import Image
 from database import GAMES_MAP
 
 class NebulaModManager:
@@ -13,12 +14,13 @@ class NebulaModManager:
         self.engine = engine
         
         self.root.title("Nebula Mod Manager")
-        self.root.geometry("1250x750")
-        self.root.minsize(1000, 600)
+        self.root.geometry("1250x850") # Slightly taller to accommodate the new details pane
+        self.root.minsize(1000, 700)
         
         self.installed_mods_data = {}
         self.mod_warnings = {} # Stores health check warnings
         self.drag_data = None
+        self.current_thumbnail = None # Prevents garbage collection of the displayed image
 
         self.apply_treeview_styles()
         self.build_ui()
@@ -38,6 +40,7 @@ class NebulaModManager:
         self.collection_tree.tag_configure("warning", foreground="#e2b714")
 
     def build_ui(self):
+        # TOP PANE (Header)
         top_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         top_frame.pack(fill="x", pady=15, padx=20)
 
@@ -54,12 +57,15 @@ class NebulaModManager:
         main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         main_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
-        # LEFT PANE
+        # LEFT PANE (Installed Mods)
         left_pane = ctk.CTkFrame(main_frame)
         left_pane.pack(side="left", fill="both", expand=True)
         left_header = ctk.CTkFrame(left_pane, fg_color="transparent")
         left_header.pack(fill="x", padx=10, pady=10)
         ctk.CTkLabel(left_header, text="Installed Mods", font=("Segoe UI", 16, "bold")).pack(side="left")
+        
+        self.lbl_installed_count = ctk.CTkLabel(left_header, text="(0)", font=("Segoe UI", 14), text_color="#a3a3a3")
+        self.lbl_installed_count.pack(side="left", padx=(5, 0))
         
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", self.filter_installed_mods)
@@ -76,15 +82,16 @@ class NebulaModManager:
         self.ctx_menu.add_command(label="Open Folder in Explorer", command=self.open_mod_folder)
         self.ctx_menu.add_command(label="Delete Mod Permanently", command=self.delete_selected_mod)
         self.installed_tree.bind("<Button-3>", lambda e: self.ctx_menu.post(e.x_root, e.y_root) if self.installed_tree.identify_row(e.y) else None)
+        self.installed_tree.bind("<<TreeviewSelect>>", lambda e: self.on_mod_select(self.installed_tree))
 
-        # MID PANE
+        # MID PANE (Transfer Buttons)
         mid_pane = ctk.CTkFrame(main_frame, fg_color="transparent")
         mid_pane.pack(side="left", fill="y", padx=15)
         ctk.CTkFrame(mid_pane, fg_color="transparent", height=150).pack()
-        ctk.CTkButton(mid_pane, text="Add >>", width=100, command=self.add_to_collection).pack(pady=5)
-        ctk.CTkButton(mid_pane, text="<< Remove", width=100, fg_color="#3b3b3b", hover_color="#555555", command=self.remove_from_collection).pack(pady=5)
+        ctk.CTkButton(mid_pane, text="Add >>", width=100, font=("Segoe UI", 13, "bold"), command=self.add_to_collection).pack(pady=5)
+        ctk.CTkButton(mid_pane, text="<< Remove", width=100, font=("Segoe UI", 13, "bold"), fg_color="#3b3b3b", hover_color="#555555", command=self.remove_from_collection).pack(pady=5)
 
-        # RIGHT PANE
+        # RIGHT PANE (Collections)
         right_pane = ctk.CTkFrame(main_frame)
         right_pane.pack(side="right", fill="both", expand=True)
         coll_ctrl = ctk.CTkFrame(right_pane, fg_color="transparent")
@@ -93,9 +100,12 @@ class NebulaModManager:
         self.current_collection_var = ctk.StringVar()
         self.collection_combo = ctk.CTkOptionMenu(coll_ctrl, variable=self.current_collection_var, command=self.on_collection_switch, width=150)
         self.collection_combo.pack(side="left", padx=(0, 5))
+        
+        self.lbl_collection_count = ctk.CTkLabel(coll_ctrl, text="(0)", font=("Segoe UI", 14), text_color="#a3a3a3")
+        self.lbl_collection_count.pack(side="left", padx=(0, 10))
 
-        ctk.CTkButton(coll_ctrl, text="New", width=50, command=self.create_collection).pack(side="left", padx=2)
-        ctk.CTkButton(coll_ctrl, text="Del", width=50, fg_color="#b53b3b", hover_color="#8c2e2e", command=self.delete_collection).pack(side="left", padx=2)
+        ctk.CTkButton(coll_ctrl, text="New", width=40, command=self.create_collection).pack(side="left", padx=2)
+        ctk.CTkButton(coll_ctrl, text="Del", width=40, fg_color="#b53b3b", hover_color="#8c2e2e", command=self.delete_collection).pack(side="left", padx=2)
         ctk.CTkButton(coll_ctrl, text="From Save", width=80, fg_color="#2b8256", hover_color="#1c593a", command=self.import_from_save).pack(side="left", padx=2)
         ctk.CTkButton(coll_ctrl, text="Auto-Sort", width=80, command=self.auto_sort).pack(side="left", padx=2)
         
@@ -120,8 +130,27 @@ class NebulaModManager:
         self.collection_tree.bind("<B1-Motion>", self.on_drag_motion)
         self.collection_tree.bind("<ButtonRelease-1>", self.on_drag_release)
         self.collection_tree.bind("<Double-1>", self.show_mod_warnings) # Hook for Health Check Popups
+        self.collection_tree.bind("<<TreeviewSelect>>", lambda e: self.on_mod_select(self.collection_tree))
 
-        # BOTTOM PANE
+        # NEW: MOD DETAILS PANE (Bottom spanning)
+        self.details_frame = ctk.CTkFrame(self.root, height=130)
+        self.details_frame.pack(fill="x", padx=20, pady=(0, 5))
+        self.details_frame.pack_propagate(False)
+        
+        self.thumb_label = ctk.CTkLabel(self.details_frame, text="Select a Mod", font=("Segoe UI", 12, "italic"), text_color="#a3a3a3", width=110, height=110, fg_color="#2b2b2b", corner_radius=8)
+        self.thumb_label.pack(side="left", padx=10, pady=10)
+        
+        self.info_frame = ctk.CTkFrame(self.details_frame, fg_color="transparent")
+        self.info_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        
+        self.lbl_mod_name = ctk.CTkLabel(self.info_frame, text="No Mod Selected", font=("Segoe UI", 22, "bold"), anchor="w")
+        self.lbl_mod_name.pack(fill="x")
+        self.lbl_mod_path = ctk.CTkLabel(self.info_frame, text="", font=("Segoe UI", 12, "italic"), text_color="#a3a3a3", anchor="w")
+        self.lbl_mod_path.pack(fill="x")
+        self.lbl_mod_desc = ctk.CTkLabel(self.info_frame, text="Select a mod from the lists above to view its details, thumbnails, and health status.\nShift-click or Ctrl-click items to select multiple mods at once.", font=("Segoe UI", 13), anchor="w", justify="left")
+        self.lbl_mod_desc.pack(fill="x", pady=(5,0))
+
+        # BOTTOM PANE (Launch & Sync Controls)
         bottom = ctk.CTkFrame(self.root, fg_color="transparent")
         bottom.pack(fill="x", pady=15, padx=20)
         ctk.CTkButton(bottom, text="↻ Refresh Mods", fg_color="#3b3b3b", hover_color="#555555", command=self.refresh_installed_mods).pack(side="left")
@@ -173,6 +202,54 @@ class NebulaModManager:
             msg = "\n\n".join(self.mod_warnings[rel_path])
             messagebox.showwarning("Mod Health Check", f"⚠️ Issues detected for this mod:\n\n{msg}")
 
+    def on_mod_select(self, tree):
+        """Handles updating the Details Pane when a mod is clicked."""
+        selected = tree.selection()
+        if not selected: return
+        
+        # Cross-clearing selection for clean UX
+        if tree == self.installed_tree:
+            if self.collection_tree.selection(): self.collection_tree.selection_remove(self.collection_tree.selection())
+        else:
+            if self.installed_tree.selection(): self.installed_tree.selection_remove(self.installed_tree.selection())
+
+        rel_path = selected[0]
+        data = self.installed_mods_data.get(rel_path)
+        if not data: return
+
+        # Text Details
+        self.lbl_mod_name.configure(text=data["name"])
+        path_text = data.get('content_path') or data.get('file_path') or "Unknown Path"
+        self.lbl_mod_path.configure(text=f"📂 {path_text}")
+        
+        desc = f"🏷️ Version: {data.get('version', 'Any')}"
+        deps = data.get('dependencies', [])
+        if deps: desc += f"   |   🔗 Dependencies: {', '.join(deps)}"
+            
+        if rel_path in self.mod_warnings:
+            desc += f"\n⚠️ Warnings: {len(self.mod_warnings[rel_path])} issues detected. Double-click in active collection list for details."
+            self.lbl_mod_name.configure(text_color="#e2b714")
+        else:
+            self.lbl_mod_name.configure(text_color="#ffffff")
+            
+        self.lbl_mod_desc.configure(text=desc)
+
+        # Thumbnail Parser
+        thumb_loaded = False
+        if data.get("content_path") and os.path.isdir(data["content_path"]):
+            thumb_path = os.path.join(data["content_path"], "thumbnail.png")
+            if os.path.exists(thumb_path):
+                try:
+                    img = Image.open(thumb_path)
+                    img.thumbnail((110, 110)) # Resize maintaining aspect ratio
+                    self.current_thumbnail = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+                    self.thumb_label.configure(image=self.current_thumbnail, text="")
+                    thumb_loaded = True
+                except Exception: pass
+                    
+        if not thumb_loaded:
+            self.thumb_label.configure(image="", text="No Image\nAvailable")
+
     # --- REFRESH VIEWS ---
     def refresh_installed_mods(self):
         for item in self.installed_tree.get_children(): self.installed_tree.delete(item)
@@ -184,19 +261,28 @@ class NebulaModManager:
     def filter_installed_mods(self, *args):
         search_term = self.search_var.get().lower()
         for item in self.installed_tree.get_children(): self.installed_tree.delete(item)
+        
         sorted_mods = sorted(self.installed_mods_data.items(), key=lambda x: x[1]["name"].lower())
+        match_count = 0
         for rel_path, data in sorted_mods:
             if search_term in data["name"].lower():
                 self.installed_tree.insert("", "end", iid=rel_path, values=(data["name"], data["version"]))
+                match_count += 1
+                
+        self.lbl_installed_count.configure(text=f"({match_count})")
 
     def refresh_collection_view(self):
         for item in self.collection_tree.get_children(): self.collection_tree.delete(item)
         game, coll = self.game_var.get(), self.current_collection_var.get()
-        if not coll: return
+        if not coll: 
+            self.lbl_collection_count.configure(text="(0)")
+            return
         
         mod_list = self.db.get_collection_mods(game, coll)
         game_ver = self.engine.get_game_version(game)
         self.mod_warnings = {}
+        
+        self.lbl_collection_count.configure(text=f"({len(mod_list)})")
         
         # Build lookup table to verify dependencies and load order
         active_names = {self.installed_mods_data.get(p, {}).get("name", ""): idx for idx, p in enumerate(mod_list)}
@@ -234,6 +320,10 @@ class NebulaModManager:
                 tag = "warning"
                 
             self.collection_tree.insert("", "end", iid=rel_path, values=(str(index+1), display_name, mod_ver), tags=(tag,))
+            
+        # Re-trigger selection logic to instantly update warning details if something moved
+        if self.collection_tree.selection():
+            self.on_mod_select(self.collection_tree)
 
     # --- DB COLLECTION INTERACTIONS ---
     def update_collection_dropdown(self):
