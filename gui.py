@@ -39,7 +39,14 @@ class NebulaModManager:
         ctk.CTkLabel(top_frame, text="Game:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=(0, 10))
         
         game_list = list(GAMES_MAP.keys())
-        self.game_var = ctk.StringVar(value=game_list[0])
+        
+        # Load the last selected game, or default to the first one
+        last_game = self.db.get_setting("last_game")
+        if last_game in game_list:
+            self.game_var = ctk.StringVar(value=last_game)
+        else:
+            self.game_var = ctk.StringVar(value=game_list[0])
+            
         ctk.CTkOptionMenu(top_frame, variable=self.game_var, values=game_list, command=self.on_game_switch, width=250).pack(side="left")
 
         ctk.CTkButton(top_frame, text="⚙ Options", fg_color="#3b3b3b", hover_color="#555555", command=self.open_options).pack(side="right")
@@ -143,11 +150,13 @@ class NebulaModManager:
         self.drag_data = None
 
     def on_game_switch(self, choice):
+        self.db.set_setting("last_game", choice)
         self.search_var.set("")
         self.update_collection_dropdown()
         self.refresh_installed_mods()
 
     def on_collection_switch(self, choice):
+        self.db.set_setting(f"last_collection_{self.game_var.get()}", choice)
         self.refresh_collection_view()
 
     # --- REFRESH VIEWS ---
@@ -177,17 +186,27 @@ class NebulaModManager:
 
     # --- DB COLLECTION INTERACTIONS ---
     def update_collection_dropdown(self):
-        colls = self.db.get_collections_list(self.game_var.get())
+        game = self.game_var.get()
+        colls = self.db.get_collections_list(game)
         self.collection_combo.configure(values=colls if colls else [""])
-        self.current_collection_var.set(colls[0] if colls else "")
+        
+        # Load the last collection for this specific game
+        last_coll = self.db.get_setting(f"last_collection_{game}")
+        if last_coll and last_coll in colls:
+            self.current_collection_var.set(last_coll)
+        else:
+            self.current_collection_var.set(colls[0] if colls else "")
+            
         self.refresh_collection_view()
 
     def create_collection(self):
         name = simpledialog.askstring("New", "Collection name:")
         if name:
-            self.db.create_collection(self.game_var.get(), name)
+            game = self.game_var.get()
+            self.db.create_collection(game, name)
             self.update_collection_dropdown()
             self.current_collection_var.set(name)
+            self.db.set_setting(f"last_collection_{game}", name)
             self.refresh_collection_view()
 
     def delete_collection(self):
@@ -404,6 +423,7 @@ class NebulaModManager:
         self.refresh_installed_mods()
         self.update_collection_dropdown()
         self.current_collection_var.set(coll_name)
+        self.db.set_setting(f"last_collection_{game}", coll_name)
         self.refresh_collection_view()
 
     def open_download_dialog(self):
