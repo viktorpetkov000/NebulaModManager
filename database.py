@@ -5,40 +5,47 @@ import json
 USER_HOME = os.path.expanduser('~')
 
 # --- DYNAMIC GAMES CONFIGURATION ---
-# To add a new game in the future, simply add it to this dictionary!
+# Added Steam "app_id" to allow native SteamCMD Workshop downloading
 GAMES_MAP = {
     "Stellaris": {
         "id": "stellaris",
+        "app_id": "281990",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Stellaris", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Stellaris\stellaris.exe"
     },
     "Hearts of Iron IV": {
         "id": "hoi4",
+        "app_id": "394360",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Hearts of Iron IV", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Hearts of Iron IV\hoi4.exe"
     },
     "Crusader Kings III": {
         "id": "ck3",
+        "app_id": "1158310",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Crusader Kings III", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings III\binaries\ck3.exe"
     },
     "Europa Universalis IV": {
         "id": "eu4",
+        "app_id": "236850",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Europa Universalis IV", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Europa Universalis IV\eu4.exe"
     },
     "Victoria 3": {
         "id": "vic3",
+        "app_id": "529340",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Victoria 3", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Victoria 3\binaries\victoria3.exe"
     },
     "Imperator: Rome": {
         "id": "ir",
+        "app_id": "859580",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Imperator", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\ImperatorRome\binaries\imperator.exe"
     },
     "Crusader Kings II": {
         "id": "ck2",
+        "app_id": "203770",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Crusader Kings II", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings II\ck2.exe"
     }
@@ -61,7 +68,6 @@ class DatabaseManager:
             );
         ''')
         
-        # Populate DB with all default paths and standard collections
         for game_name, game_data in GAMES_MAP.items():
             self.cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"{game_data['id']}_mod_path", game_data['default_mod']))
             self.cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (f"{game_data['id']}_exe_path", game_data['default_exe']))
