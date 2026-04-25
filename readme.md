@@ -6,11 +6,13 @@ A modern, lightning-fast, and advanced Mod Manager built with Python and CustomT
 
 * **Advanced Load Order:** Physically drag and drop mods to define exact load orders.
 * **Auto-Sorting Algorithm:** Automatically organizes your collection (Core overhauls at the top, UI in the middle, compatibility patches at the bottom).
+* **Missing Dependencies Resolution:** Instantly identifies missing required dependencies and offers to copy them to clipboard or directly download them via SteamCMD.
 * **Save Game Integration:** Reads your raw Paradox `.sav` files to detect and instantly rebuild the exact mod collection used in that playthrough.
 * **The Conflict Detector:** Deep-scans every `.zip` and folder in your active collection to show you exactly which vanilla files are being overwritten by multiple mods simultaneously.
 * **Mega-Mod Merger:** Merges a 50+ mod collection into a single, highly optimized "Mega-Mod" folder to drastically improve game boot times.
-* **Orphan File Cleanup:** One-click junk removal for broken or orphaned `.mod` files.
-* **Lightning Fast:** Uses an SQLite database and asynchronous concurrent thread pooling to parse hundreds of mods instantly.
+* **Smart Collection Cleanup:** One-click tools to purge deleted/orphaned mods and gracefully remove mods with broken dependencies from your load order.
+* **Visual Load Order Feedback:** Dynamic UI highlighting for active mods and intuitive double-click bindings to rapidly build your playsets.
+* **Lightning Fast:** Uses an SQLite database (with metadata caching) and a centralized asynchronous concurrent thread pool to parse hundreds of mods without dropping a frame.
 
 ## 🚀 Installation & Usage
 

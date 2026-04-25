@@ -20,6 +20,8 @@ dist/
 *.spec
 *.manifest
 build.bat
+icon.ico
+create_icon.py
 
 # OS Generated Files
 .DS_Store

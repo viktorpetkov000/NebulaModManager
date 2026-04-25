@@ -86,7 +86,7 @@ class ModEngine:
                             with open(mod_file, 'w', encoding='utf-8') as f: f.writelines(new_lines)
                 except Exception: pass
 
-    def parse_mod_file(self, mod_file_path, rel_path, game_base_dir):
+    def parse_mod_file(self, mod_file_path, rel_path, game_base_dir, mtime=0):
         name, version, content_relative_path, dependencies, remote_id = "Unknown Mod", "Any", "", [], None
         try:
             with open(mod_file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -101,8 +101,8 @@ class ModEngine:
                 if dep_match: dependencies = re.findall(r'"([^"]*)"', dep_match.group(1))
 
             mod_content_path = os.path.join(game_base_dir, content_relative_path.replace('/', os.sep)) if content_relative_path else None
-            return rel_path, {"name": name, "version": version, "file_path": mod_file_path, "content_path": mod_content_path, "dependencies": dependencies, "remote_id": remote_id}
-        except Exception: return rel_path, None
+            return rel_path, {"name": name, "version": version, "file_path": mod_file_path, "content_path": mod_content_path, "dependencies": dependencies, "remote_id": remote_id}, mtime
+        except Exception: return rel_path, None, mtime
 
     def scan_installed_mods(self, game):
         target_path = self.get_mod_path(game)
@@ -111,14 +111,41 @@ class ModEngine:
         self.repair_mod_paths(target_path)
         
         game_base_dir = os.path.dirname(target_path)
-        mod_files = [(os.path.join(target_path, f), f"mod/{f}", game_base_dir) for f in os.listdir(target_path) if f.endswith(".mod")]
         
+        cached_mods = self.db.get_mod_cache(game)
+        new_cache = {}
         installed_data = {}
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self.parse_mod_file, *args) for args in mod_files]
-            for future in concurrent.futures.as_completed(futures):
-                rel_path, data = future.result()
-                if data: installed_data[rel_path] = data
+        to_parse = []
+        
+        for file in os.listdir(target_path):
+            if file.endswith(".mod"):
+                mod_file_path = os.path.join(target_path, file)
+                rel_path = f"mod/{file}"
+                try:
+                    mtime = os.path.getmtime(mod_file_path)
+                    if rel_path in cached_mods and cached_mods[rel_path][0] == mtime:
+                        try:
+                            installed_data[rel_path] = json.loads(cached_mods[rel_path][1])
+                            new_cache[rel_path] = cached_mods[rel_path]
+                            continue
+                        except: pass
+                    to_parse.append((mod_file_path, rel_path, game_base_dir, mtime))
+                except Exception: pass
+        
+        if to_parse:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self.parse_mod_file, *args) for args in to_parse]
+                for future in concurrent.futures.as_completed(futures):
+                    rel_path, data, mtime = future.result()
+                    if data:
+                        installed_data[rel_path] = data
+                        new_cache[rel_path] = (mtime, json.dumps(data))
+                        
+            self.db.set_mod_cache(game, new_cache)
+        elif len(new_cache) != len(cached_mods):
+            # Clean up db cache for deleted mods
+            self.db.set_mod_cache(game, new_cache)
+            
         return installed_data
 
     # --- GAME LAUNCH & MOD TOOLS ---
@@ -466,11 +493,20 @@ class ModEngine:
             process = subprocess.Popen([steamcmd_exe, "+runscript", script_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, creationflags=subprocess.CREATE_NO_WINDOW)
             self.active_processes[task_id] = process
             
+            error_reason = ""
             for line in process.stdout:
                 if task_id in self.cancel_flags:
                     process.kill()
                     break
-                match = re.search(r'progress:\s*([0-9.]+)', line.lower())
+                
+                lower_line = line.lower()
+                # Immediately catch Steam API denial so the user doesn't have to wait
+                if "error! download item" in lower_line or "access denied" in lower_line or "file not found" in lower_line:
+                    error_reason = line.strip()
+                    process.kill()
+                    break
+
+                match = re.search(r'progress:\s*([0-9.]+)', lower_line)
                 if match and progress_callback:
                     progress_callback(float(match.group(1)))
 
@@ -479,7 +515,7 @@ class ModEngine:
             if os.path.exists(script_path): os.remove(script_path)
             
             if task_id in self.cancel_flags: return False, "Cancelled by user"
-            if process.returncode != 0: return False, "SteamCMD execution failed"
+            if error_reason: return False, error_reason
             
             item_folder = os.path.join(steamcmd_dir, "steamapps", "workshop", "content", str(app_id), str(wid))
             dest_folder = os.path.join(target_path, f"ugc_{wid}")
@@ -500,6 +536,8 @@ class ModEngine:
                 with open(os.path.join(dest_folder, "nebula_update.json"), "w") as f:
                     json.dump({"time_updated": remote_time}, f)
                 
-            return True, ""
+                return True, ""
+            else:
+                return False, "Steam denied the download (Mod may be hidden, deleted, or requires game ownership)."
         except Exception as e:
             return False, str(e)

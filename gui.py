@@ -7,6 +7,7 @@ import shutil
 import io
 import urllib.request
 import uuid
+import concurrent.futures
 import datetime
 import webbrowser
 import re
@@ -38,16 +39,25 @@ class NebulaModManager:
         self.root.minsize(1000, 700)
         self.root.configure(fg_color=self.bg_color)
         
+        # --- LOAD ICON ---
+        self.icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.ico')
+        if os.path.exists(self.icon_path):
+            try:
+                self.root.iconbitmap(self.icon_path)
+            except Exception: pass
+        
         self.installed_mods_data = {}
         self.mod_warnings = {} 
         self.missing_dep_names = set()
         self.drag_data = None
         self.current_thumbnail = None
+        self.empty_image = ctk.CTkImage(light_image=Image.new("RGBA", (1, 1), (0, 0, 0, 0)), size=(1, 1))
         
         self.download_queue = [] 
         self.is_downloading = False
         self.workshop_ui_updater = None 
         self.available_updates = {}
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
         self.icon = None
         if pystray:
@@ -64,6 +74,14 @@ class NebulaModManager:
         # Initial Auto-Check for Updates
         if self.db.get_setting("auto_update_check") != "False":
             self.root.after(1500, self.check_for_updates)
+
+    def _focus_if_exists(self, win_attr):
+        win = getattr(self, win_attr, None)
+        if win and win.winfo_exists():
+            win.deiconify()
+            win.focus_force()
+            return True
+        return False
 
     def apply_treeview_styles(self):
         style = ttk.Style()
@@ -123,6 +141,8 @@ class NebulaModManager:
         self.installed_tree.column("Version", width=60, anchor="center")
         self.installed_tree.column("Status", width=90, anchor="center")
         self.installed_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.installed_tree.tag_configure("in_collection", foreground="#38BDF8")
+        self.installed_tree.tag_configure("update_avail", foreground="#D946EF")
         
         # Setup Installed Mods Right-Click Menu
         self.ctx_menu = tk.Menu(self.root, tearoff=0, bg=self.pane_color, fg="#ffffff", activebackground=self.accent_color, relief="flat", borderwidth=0)
@@ -145,13 +165,16 @@ class NebulaModManager:
                 
         self.installed_tree.bind("<Button-3>", on_installed_right_click)
         self.installed_tree.bind("<<TreeviewSelect>>", lambda e: self.on_mod_select(self.installed_tree))
+        self.installed_tree.bind("<Double-1>", lambda e: self.add_to_collection())
 
         # MID PANE (Transfer Buttons)
         mid_pane = ctk.CTkFrame(main_frame, fg_color="transparent")
         mid_pane.pack(side="left", fill="y", padx=15)
-        ctk.CTkFrame(mid_pane, fg_color="transparent", height=150).pack()
+        ctk.CTkFrame(mid_pane, fg_color="transparent", height=130).pack()
         ctk.CTkButton(mid_pane, text="Add >>", width=100, font=("Segoe UI", 13, "bold"), fg_color=self.pane_color, hover_color="#1E293B", command=self.add_to_collection).pack(pady=5)
-        ctk.CTkButton(mid_pane, text="<< Remove", width=100, font=("Segoe UI", 13, "bold"), fg_color=self.pane_color, hover_color="#1E293B", command=self.remove_from_collection).pack(pady=5)
+        ctk.CTkButton(mid_pane, text="Add All >>", width=100, font=("Segoe UI", 13, "bold"), fg_color=self.pane_color, hover_color="#1E293B", command=self.add_all_to_collection).pack(pady=5)
+        ctk.CTkButton(mid_pane, text="<< Remove", width=100, font=("Segoe UI", 13, "bold"), fg_color=self.pane_color, hover_color="#1E293B", command=self.remove_from_collection).pack(pady=(20, 5))
+        ctk.CTkButton(mid_pane, text="<< Remove All", width=100, font=("Segoe UI", 13, "bold"), fg_color=self.pane_color, hover_color="#1E293B", command=self.remove_all_from_collection).pack(pady=5)
 
         # RIGHT PANE (Collections)
         right_pane = ctk.CTkFrame(main_frame, fg_color="transparent")
@@ -177,6 +200,7 @@ class NebulaModManager:
         tools_f.pack(fill="x", padx=10, pady=(0, 5))
         ctk.CTkLabel(tools_f, text="⚠️ Double-click mods with yellow warnings for details", font=("Segoe UI", 11, "italic"), text_color="#64748B").pack(side="left")
         ctk.CTkButton(tools_f, text="Auto-Sort", width=80, fg_color=self.pane_color, hover_color="#1E293B", command=self.auto_sort).pack(side="right", padx=2)
+        ctk.CTkButton(tools_f, text="Clean", width=60, fg_color=self.pane_color, hover_color="#1E293B", command=self.open_clean_collection_menu).pack(side="right", padx=2)
         ctk.CTkButton(tools_f, text="Import Zip", width=70, fg_color=self.pane_color, hover_color="#1E293B", command=self.import_collection).pack(side="right", padx=2)
         ctk.CTkButton(tools_f, text="Export Zip", width=70, fg_color=self.pane_color, hover_color="#1E293B", command=self.export_collection).pack(side="right", padx=2)
 
@@ -192,7 +216,7 @@ class NebulaModManager:
         self.collection_tree.bind("<ButtonPress-1>", self.on_drag_start)
         self.collection_tree.bind("<B1-Motion>", self.on_drag_motion)
         self.collection_tree.bind("<ButtonRelease-1>", self.on_drag_release)
-        self.collection_tree.bind("<Double-1>", self.show_mod_warnings)
+        self.collection_tree.bind("<Double-1>", self.on_collection_double_click)
         self.collection_tree.bind("<<TreeviewSelect>>", lambda e: self.on_mod_select(self.collection_tree))
 
         # MOD DETAILS PANE
@@ -251,7 +275,7 @@ class NebulaModManager:
         self.lbl_mod_name.configure(text="No Mod Selected", text_color="#F8FAFC")
         self.lbl_mod_path.configure(text="")
         self.lbl_mod_desc.configure(text="Select a mod from the lists above to view its details, thumbnails, and health status.")
-        self.thumb_label.configure(image="", text="Select a Mod")
+        self.thumb_label.configure(image=self.empty_image, text="Select a Mod")
         self.current_thumbnail = None
         self.btn_cancel_dl.pack_forget()
 
@@ -269,7 +293,7 @@ class NebulaModManager:
             self.available_updates = updates
             self.root.after(0, self._apply_updates_ui)
             
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
         
     def _apply_updates_ui(self):
         self.update_prog.stop()
@@ -351,7 +375,9 @@ class NebulaModManager:
                     self.root.after(0, lambda t=task["title"]: self.set_status(f"Successfully installed: {t}", color="#10B981"))
                     self.root.after(0, lambda t=task: self._post_download_cleanup(t))
                 else:
-                    self.root.after(0, lambda t=task["title"], e=error_msg: self.set_status(f"Failed to install {t}: {e}", color="#EF4444"))
+                    clean_error = error_msg.replace("ERROR!", "").strip()
+                    self.root.after(0, lambda t=task["title"], e=clean_error: messagebox.showerror("Download Denied", f"Steam refused to download '{t}'.\n\nDetails: {e}"))
+                    self.root.after(0, lambda t=task["title"], e=clean_error: self.set_status(f"Failed: {t}", color="#EF4444"))
                 
                 self.download_queue = [t for t in self.download_queue if t["id"] != task_id]
                 self.root.after(0, self.refresh_installed_mods)
@@ -361,7 +387,7 @@ class NebulaModManager:
             self.is_downloading = False
             self.root.after(0, lambda: self.set_status("All downloads completed.", color="#10B981"))
             
-        threading.Thread(target=worker, daemon=True).start()
+        self.executor.submit(worker)
 
     def _post_download_cleanup(self, task):
         # 1. Re-scan entirely to find exactly where the downloaded mod ended up
@@ -404,6 +430,16 @@ class NebulaModManager:
             self.refresh_collection_view()
 
     # --- UI EVENT LOGIC ---
+    def on_collection_double_click(self, event):
+        selected = self.collection_tree.selection()
+        if not selected: return
+        item = selected[0]
+        tags = self.collection_tree.item(item, "tags")
+        if "warning" in tags:
+            self.show_mod_warnings(event)
+        else:
+            self.remove_from_collection()
+
     def open_selected_mod_page(self, event=None):
         if self.btn_cancel_dl.winfo_ismapped(): return
         
@@ -459,10 +495,15 @@ class NebulaModManager:
 
     def hide_window(self):
         self.root.withdraw()
-        image = Image.new('RGB', (64, 64), color=(31, 83, 141))
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((16, 16, 48, 48), fill="white")
-        draw.rectangle((24, 24, 40, 40), fill=(181, 59, 59))
+        
+        # Load custom icon for system tray if it exists
+        if hasattr(self, 'icon_path') and os.path.exists(self.icon_path):
+            try:
+                image = Image.open(self.icon_path)
+            except Exception:
+                image = Image.new('RGB', (64, 64), color=(11, 15, 25))
+        else:
+            image = Image.new('RGB', (64, 64), color=(11, 15, 25))
 
         def on_show(icon, item):
             icon.stop()
@@ -512,7 +553,7 @@ class NebulaModManager:
                 self.lbl_mod_name.configure(text=task["title"], text_color="#10B981")
                 self.lbl_mod_path.configure(text=f"🔗 {task['url']}")
                 self.lbl_mod_desc.configure(text=f"Status: {task['status']}")
-                self.thumb_label.configure(image="", text="Downloading...")
+                self.thumb_label.configure(image=self.empty_image, text="Downloading...")
                 self.btn_cancel_dl.pack(side="right", padx=20)
                 return
         
@@ -554,7 +595,7 @@ class NebulaModManager:
                 except Exception: pass
                     
         if not thumb_loaded:
-            self.thumb_label.configure(image="", text="No Image\nAvailable")
+            self.thumb_label.configure(image=self.empty_image, text="No Image\nAvailable")
 
     # --- REFRESH VIEWS ---
     def refresh_installed_mods(self):
@@ -569,7 +610,14 @@ class NebulaModManager:
         self.refresh_collection_view()
 
     def filter_installed_mods(self, *args):
+        if hasattr(self, '_filter_after_id'):
+            self.root.after_cancel(self._filter_after_id)
+        self._filter_after_id = self.root.after(150, self._do_filter_installed_mods)
+
+    def _do_filter_installed_mods(self):
         search_term = self.search_var.get().lower()
+        game, coll = self.game_var.get(), self.current_collection_var.get()
+        active_mods = self.db.get_collection_mods(game, coll) if coll else []
         
         for item in self.installed_tree.get_children(): 
             if not str(item).startswith("dl_"):
@@ -585,6 +633,9 @@ class NebulaModManager:
                 if rel_path in self.available_updates:
                     tag = "update_avail"
                     status_text = "Update!"
+                elif rel_path in active_mods:
+                    tag = "in_collection"
+                    status_text = "Active"
                     
                 self.installed_tree.insert("", "end", iid=rel_path, values=(data["name"], data["version"], status_text), tags=(tag,))
                 match_count += 1
@@ -670,25 +721,56 @@ class NebulaModManager:
             if hasattr(self, 'dep_resolve_btn') and self.dep_resolve_btn.winfo_ismapped():
                 self.dep_resolve_btn.pack_forget()
 
+        self.filter_installed_mods()
+
     # --- AUTO-DEPENDENCY SYSTEM ---
     def resolve_dependencies(self):
+        if self._focus_if_exists('dep_win'): return
         deps = list(self.missing_dep_names)
-        msg = f"Nebula will attempt to search Steam and download the following missing dependencies:\n\n{', '.join(deps[:10])}{'...' if len(deps)>10 else ''}\n\nProceed?"
-        if not messagebox.askyesno("Resolve Dependencies", msg): return
+        
+        self.dep_win = ctk.CTkToplevel(self.root)
+        self.dep_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        dlg = self.dep_win
+        dlg.title("Resolve Dependencies")
+        dlg.geometry("500x350")
+        dlg.focus_force()
+        dlg.configure(fg_color=self.bg_color)
+        
+        ctk.CTkLabel(dlg, text=f"Missing Dependencies ({len(deps)}):", text_color=self.accent_color, font=("Segoe UI", 16, "bold")).pack(pady=(15, 5))
+        
+        textbox = ctk.CTkTextbox(dlg, width=450, height=150, fg_color=self.pane_color, text_color="#F8FAFC")
+        textbox.pack(pady=5)
+        textbox.insert("1.0", "\n".join(deps))
+        textbox.configure(state="disabled")
+        
+        def copy_deps():
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(deps))
+            self.root.update()
+            self.set_status("Missing dependencies copied to clipboard!", color="#10B981")
             
-        self.set_status(f"Resolving {len(deps)} dependencies...", color="#D946EF")
-        def task():
-            game = self.game_var.get()
-            for dep in deps:
-                self.root.after(0, lambda d=dep: self.set_status(f"Searching for {d}..."))
-                results = self.engine.search_steam_workshop(game, dep)
-                if results:
-                    best_match = results[0]
-                    url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={best_match['id']}"
-                    self.root.after(0, lambda t=best_match['title'], u=url: self.add_to_download_queue(t, u))
-                else:
-                    print(f"Could not find dependency on Steam: {dep}")
-        threading.Thread(target=task, daemon=True).start()
+        def proceed():
+            dlg.destroy()
+            self.set_status(f"Resolving {len(deps)} dependencies...", color="#D946EF")
+            def task():
+                game = self.game_var.get()
+                for dep in deps:
+                    self.root.after(0, lambda d=dep: self.set_status(f"Searching for {d}..."))
+                    results = self.engine.search_steam_workshop(game, dep)
+                    if results:
+                        best_match = results[0]
+                        url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={best_match['id']}"
+                        self.root.after(0, lambda t=best_match['title'], u=url: self.add_to_download_queue(t, u))
+                    else:
+                        print(f"Could not find dependency on Steam: {dep}")
+            self.executor.submit(task)
+            
+        btn_f = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_f.pack(pady=15)
+        
+        ctk.CTkButton(btn_f, text="Copy to Clipboard", fg_color=self.pane_color, hover_color="#1E293B", command=copy_deps).pack(side="left", padx=5)
+        ctk.CTkButton(btn_f, text="Search Steam & Download", fg_color="#059669", hover_color="#047857", command=proceed).pack(side="left", padx=5)
 
     # --- DB COLLECTION INTERACTIONS ---
     def update_collection_dropdown(self):
@@ -729,6 +811,17 @@ class NebulaModManager:
         self.db.save_collection_mods(game, coll, mods)
         self.refresh_collection_view()
 
+    def add_all_to_collection(self):
+        game, coll = self.game_var.get(), self.current_collection_var.get()
+        if not coll: return
+        mods = self.db.get_collection_mods(game, coll)
+        for rel_path in self.installed_tree.get_children():
+            if str(rel_path).startswith("dl_"): continue
+            if rel_path not in mods: mods.append(rel_path)
+        self.db.save_collection_mods(game, coll, mods)
+        self.refresh_collection_view()
+        self.set_status(f"Added visible mods to '{coll}'.", color="#10B981")
+
     def remove_from_collection(self):
         game, coll = self.game_var.get(), self.current_collection_var.get()
         if not coll: return
@@ -737,6 +830,98 @@ class NebulaModManager:
             if rel_path in mods: mods.remove(rel_path)
         self.db.save_collection_mods(game, coll, mods)
         self.refresh_collection_view()
+
+    def remove_all_from_collection(self):
+        game, coll = self.game_var.get(), self.current_collection_var.get()
+        if not coll: return
+        if messagebox.askyesno("Remove All", f"Are you sure you want to empty the collection '{coll}'?"):
+            self.db.save_collection_mods(game, coll, [])
+            self.refresh_collection_view()
+            self.set_status(f"Emptied collection '{coll}'.", color="#10B981")
+
+    def open_clean_collection_menu(self):
+        if self._focus_if_exists('clean_win'): return
+        game, coll = self.game_var.get(), self.current_collection_var.get()
+        if not coll: return
+        
+        self.clean_win = ctk.CTkToplevel(self.root)
+        self.clean_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        c_win = self.clean_win
+        c_win.geometry("350x200")
+        c_win.title("Clean Collection")
+        c_win.configure(fg_color=self.bg_color)
+        c_win.focus_force()
+        
+        ctk.CTkLabel(c_win, text="Collection Cleanup", font=("Segoe UI", 16, "bold"), text_color=self.accent_color).pack(pady=(15, 10))
+        
+        ctk.CTkButton(c_win, text="Remove Missing Mods", fg_color=self.pane_color, command=lambda: [self.remove_missing_mods(), c_win.destroy()]).pack(fill="x", padx=40, pady=5)
+        ctk.CTkButton(c_win, text="Remove Mods with Missing Deps", fg_color=self.pane_color, command=lambda: [self.remove_mods_with_missing_deps(), c_win.destroy()]).pack(fill="x", padx=40, pady=5)
+
+    def remove_missing_mods(self):
+        game, coll = self.game_var.get(), self.current_collection_var.get()
+        if not coll: return
+        mod_list = self.db.get_collection_mods(game, coll)
+        
+        new_list = []
+        removed_count = 0
+        for rel_path in mod_list:
+            data = self.installed_mods_data.get(rel_path)
+            if data:
+                new_list.append(rel_path)
+            else:
+                is_downloading = False
+                wid_match = re.search(r'ugc_(\d+)', rel_path)
+                if wid_match:
+                    wid = wid_match.group(1)
+                    if any(t for t in self.download_queue if f"id={wid}" in t["url"]):
+                        is_downloading = True
+                if is_downloading:
+                    new_list.append(rel_path)
+                else:
+                    removed_count += 1
+                    
+        if removed_count > 0:
+            self.db.save_collection_mods(game, coll, new_list)
+            self.refresh_collection_view()
+            self.set_status(f"Removed {removed_count} missing mods.", color="#10B981")
+        else:
+            self.set_status("No missing mods to remove.", color="#F59E0B")
+
+    def remove_mods_with_missing_deps(self):
+        game, coll = self.game_var.get(), self.current_collection_var.get()
+        if not coll: return
+        mod_list = self.db.get_collection_mods(game, coll)
+        
+        removed_count = 0
+        while True:
+            active_names = {self.installed_mods_data.get(p, {}).get("name", ""): idx for idx, p in enumerate(mod_list) if p in self.installed_mods_data}
+            
+            to_remove = []
+            for rel_path in mod_list:
+                data = self.installed_mods_data.get(rel_path)
+                if data:
+                    has_missing = False
+                    for dep in data.get("dependencies", []):
+                        if dep not in active_names:
+                            has_missing = True
+                            break
+                    if has_missing:
+                        to_remove.append(rel_path)
+            
+            if not to_remove:
+                break
+                
+            for r in to_remove:
+                mod_list.remove(r)
+                removed_count += 1
+                
+        if removed_count > 0:
+            self.db.save_collection_mods(game, coll, mod_list)
+            self.refresh_collection_view()
+            self.set_status(f"Removed {removed_count} mods with missing dependencies.", color="#10B981")
+        else:
+            self.set_status("No mods with missing dependencies found.", color="#F59E0B")
 
     # --- ENGINE WRAPPERS ---
     def auto_sort(self):
@@ -812,7 +997,11 @@ class NebulaModManager:
 
     # --- MOD TOOLS & OPTIONS ---
     def open_tools_menu(self):
-        tools_win = ctk.CTkToplevel(self.root)
+        if self._focus_if_exists('tools_win'): return
+        self.tools_win = ctk.CTkToplevel(self.root)
+        self.tools_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        tools_win = self.tools_win
         tools_win.title("Mod Toolkit")
         tools_win.geometry("450x380")
         tools_win.configure(fg_color=self.bg_color)
@@ -835,7 +1024,7 @@ class NebulaModManager:
                 self.root.after(0, lambda: self.set_status("Save games backed up successfully!", color="#10B981"))
             except Exception as e:
                 self.root.after(0, lambda: self.set_status(f"Backup failed: {e}", color="#EF4444"))
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
 
     def tool_clean(self):
         orphans = self.engine.clean_junk(self.game_var.get())
@@ -843,11 +1032,15 @@ class NebulaModManager:
         self.set_status(f"Cleaned {orphans} orphaned mod files.", color="#10B981")
 
     def tool_conflicts(self):
+        if self._focus_if_exists('c_win'): return
         game, coll = self.game_var.get(), self.current_collection_var.get()
         active_data = [self.installed_mods_data.get(p) for p in self.db.get_collection_mods(game, coll)]
         conflicts = self.engine.find_conflicts(active_data)
         
-        c_win = ctk.CTkToplevel(self.root)
+        self.c_win = ctk.CTkToplevel(self.root)
+        self.c_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        c_win = self.c_win
         c_win.geometry("800x500")
         c_win.title("Conflicts")
         c_win.configure(fg_color=self.bg_color)
@@ -880,10 +1073,14 @@ class NebulaModManager:
             except Exception as e: 
                 self.root.after(0, lambda: self.set_status(f"Merge error: {e}", color="#EF4444"))
 
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
 
     def open_options(self):
-        opt_win = ctk.CTkToplevel(self.root)
+        if self._focus_if_exists('opt_win'): return
+        self.opt_win = ctk.CTkToplevel(self.root)
+        self.opt_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        opt_win = self.opt_win
         opt_win.geometry("750x550")
         opt_win.title(f"Settings - {self.game_var.get()}")
         opt_win.configure(fg_color=self.bg_color)
@@ -960,6 +1157,7 @@ class NebulaModManager:
 
     # --- SHARE / LOAD ORDER CODES ---
     def share_load_order(self):
+        if self._focus_if_exists('share_win'): return
         game, coll = self.game_var.get(), self.current_collection_var.get()
         if not coll: return
         mods = self.db.get_collection_mods(game, coll)
@@ -974,7 +1172,10 @@ class NebulaModManager:
             
         code_str = "NEB-" + base64.b64encode(zlib.compress(",".join(wids).encode())).decode()
         
-        dlg = ctk.CTkToplevel(self.root)
+        self.share_win = ctk.CTkToplevel(self.root)
+        self.share_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        dlg = self.share_win
         dlg.title("Share Load Order")
         dlg.geometry("500x150")
         dlg.focus_force()
@@ -1028,7 +1229,7 @@ class NebulaModManager:
                         title = api_data.get(str(w), {}).get("title", f"Mod {w}")
                         url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={w}"
                         self.root.after(0, lambda t=title, u=url: self.add_to_download_queue(t, u))
-                threading.Thread(target=fetch_and_queue, daemon=True).start()
+                self.executor.submit(fetch_and_queue)
                 
             self.refresh_collection_view()
             self.set_status("Collection imported via Code!", color="#10B981")
@@ -1049,7 +1250,7 @@ class NebulaModManager:
                 self.root.after(0, lambda: self.set_status("Collection exported successfully!", color="#10B981"))
             except Exception as e: 
                 self.root.after(0, lambda: self.set_status(f"Export Failed: {e}", color="#EF4444"))
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
 
     def import_collection(self):
         zip_path = filedialog.askopenfilename(filetypes=[("Zip", "*.zip")])
@@ -1065,7 +1266,7 @@ class NebulaModManager:
                 self.root.after(0, lambda: self.finish_import(game, coll_name, new_mods))
             except Exception as e: 
                 self.root.after(0, lambda: self.set_status(f"Import Failed: {e}", color="#EF4444"))
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
 
     def finish_import(self, game, coll_name, new_mods):
         self.db.create_collection(game, coll_name)
@@ -1079,7 +1280,11 @@ class NebulaModManager:
 
     # --- LOCAL INSTALL & DIRECT URL ---
     def open_install_local_dialog(self):
-        dl_win = ctk.CTkToplevel(self.root)
+        if self._focus_if_exists('dl_win'): return
+        self.dl_win = ctk.CTkToplevel(self.root)
+        self.dl_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        dl_win = self.dl_win
         dl_win.geometry("400x200")
         dl_win.title("Install Local Mod")
         dl_win.configure(fg_color=self.bg_color)
@@ -1115,7 +1320,7 @@ class NebulaModManager:
                 self.root.after(0, self.refresh_installed_mods)
             except Exception as e:
                 self.root.after(0, lambda: self.set_status(f"Installation failed: {e}", color="#EF4444"))
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
         
     def install_local_folder(self, folder_path):
         target_path = self.engine.get_mod_path(self.game_var.get())
@@ -1132,10 +1337,14 @@ class NebulaModManager:
                 self.root.after(0, self.refresh_installed_mods)
             except Exception as e:
                 self.root.after(0, lambda: self.set_status(f"Copy failed: {e}", color="#EF4444"))
-        threading.Thread(target=task, daemon=True).start()
+        self.executor.submit(task)
 
     def open_download_dialog(self):
-        dl_win = ctk.CTkToplevel(self.root)
+        if self._focus_if_exists('direct_dl_win'): return
+        self.direct_dl_win = ctk.CTkToplevel(self.root)
+        self.direct_dl_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
+        dl_win = self.direct_dl_win
         dl_win.geometry("550x300")
         dl_win.title("Direct Download")
         dl_win.configure(fg_color=self.bg_color)
@@ -1165,10 +1374,17 @@ class NebulaModManager:
             return
             
         self.wb_win = ctk.CTkToplevel(self.root)
+        self.wb_win.transient(self.root)
+        locals()[list(locals().keys())[-1]].transient(self.root)
         self.wb_win.geometry("950x750")
         self.wb_win.title(f"Steam Workshop Browser - {self.game_var.get()}")
         self.wb_win.configure(fg_color=self.bg_color)
         self.wb_win.focus_force()
+        
+        # Load the icon for the child window as well
+        if hasattr(self, 'icon_path') and os.path.exists(self.icon_path):
+            try: self.wb_win.iconbitmap(self.icon_path)
+            except Exception: pass
         
         def fast_close():
             self.wb_win.withdraw()
@@ -1283,7 +1499,7 @@ class NebulaModManager:
                 results = self.engine.search_steam_workshop(game, query, page, sort, days)
                 self.root.after(0, lambda: render_results(results, lbl_loading))
             
-            threading.Thread(target=fetch, daemon=True).start()
+            self.executor.submit(fetch)
         
         def render_results(results, loader_lbl):
             loader_lbl.destroy()

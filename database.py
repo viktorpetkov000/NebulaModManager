@@ -66,6 +66,8 @@ class DatabaseManager:
                 collection_id INTEGER, rel_path TEXT, load_order INTEGER, 
                 FOREIGN KEY(collection_id) REFERENCES collections(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS mod_cache (game TEXT, rel_path TEXT, mtime REAL, json_data TEXT, PRIMARY KEY(game, rel_path));
+            CREATE TABLE IF NOT EXISTS mod_tags (rel_path TEXT, tag TEXT, PRIMARY KEY(rel_path, tag));
         ''')
         
         for game_name, game_data in GAMES_MAP.items():
@@ -126,4 +128,31 @@ class DatabaseManager:
         self.cursor.execute("DELETE FROM collection_mods WHERE collection_id=?", (cid,))
         data = [(cid, rel_path, i) for i, rel_path in enumerate(mod_list)]
         self.cursor.executemany("INSERT INTO collection_mods (collection_id, rel_path, load_order) VALUES (?, ?, ?)", data)
+        self.db_conn.commit()
+
+    # --- MOD CACHE & TAGS ---
+    def get_mod_cache(self, game):
+        self.cursor.execute("SELECT rel_path, mtime, json_data FROM mod_cache WHERE game=?", (game,))
+        return {r[0]: (r[1], r[2]) for r in self.cursor.fetchall()}
+
+    def set_mod_cache(self, game, cache_dict):
+        self.cursor.execute("DELETE FROM mod_cache WHERE game=?", (game,))
+        data = [(game, rel_path, mtime, json_data) for rel_path, (mtime, json_data) in cache_dict.items()]
+        self.cursor.executemany("INSERT INTO mod_cache (game, rel_path, mtime, json_data) VALUES (?, ?, ?, ?)", data)
+        self.db_conn.commit()
+
+    def get_mod_tags(self):
+        self.cursor.execute("SELECT rel_path, tag FROM mod_tags")
+        res = {}
+        for r in self.cursor.fetchall():
+            if r[0] not in res: res[r[0]] = []
+            res[r[0]].append(r[1])
+        return res
+
+    def add_mod_tag(self, rel_path, tag):
+        self.cursor.execute("INSERT OR IGNORE INTO mod_tags (rel_path, tag) VALUES (?, ?)", (rel_path, tag))
+        self.db_conn.commit()
+        
+    def remove_mod_tag(self, rel_path, tag):
+        self.cursor.execute("DELETE FROM mod_tags WHERE rel_path=? AND tag=?", (rel_path, tag))
         self.db_conn.commit()
