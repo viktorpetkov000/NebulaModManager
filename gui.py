@@ -61,7 +61,7 @@ class NebulaModManager:
 
         self.icon = None
         if pystray:
-            self.root.protocol('WM_DELETE_WINDOW', self.hide_window)
+            self.root.bind("<Unmap>", self.on_unmap)
 
         # Global Hotkeys
         self.root.bind("<F5>", lambda e: self.refresh_installed_mods())
@@ -493,6 +493,10 @@ class NebulaModManager:
         self.db.set_setting(f"last_collection_{self.game_var.get()}", choice)
         self.refresh_collection_view()
 
+    def on_unmap(self, event):
+        if str(event.widget) == str(self.root) and self.root.state() == 'iconic':
+            self.hide_window()
+
     def hide_window(self):
         self.root.withdraw()
         
@@ -727,10 +731,8 @@ class NebulaModManager:
     def resolve_dependencies(self):
         if self._focus_if_exists('dep_win'): return
         deps = list(self.missing_dep_names)
-        
         self.dep_win = ctk.CTkToplevel(self.root)
         self.dep_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         dlg = self.dep_win
         dlg.title("Resolve Dependencies")
         dlg.geometry("500x350")
@@ -846,7 +848,6 @@ class NebulaModManager:
         
         self.clean_win = ctk.CTkToplevel(self.root)
         self.clean_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         c_win = self.clean_win
         c_win.geometry("350x200")
         c_win.title("Clean Collection")
@@ -1000,7 +1001,6 @@ class NebulaModManager:
         if self._focus_if_exists('tools_win'): return
         self.tools_win = ctk.CTkToplevel(self.root)
         self.tools_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         tools_win = self.tools_win
         tools_win.title("Mod Toolkit")
         tools_win.geometry("450x380")
@@ -1039,7 +1039,6 @@ class NebulaModManager:
         
         self.c_win = ctk.CTkToplevel(self.root)
         self.c_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         c_win = self.c_win
         c_win.geometry("800x500")
         c_win.title("Conflicts")
@@ -1079,7 +1078,6 @@ class NebulaModManager:
         if self._focus_if_exists('opt_win'): return
         self.opt_win = ctk.CTkToplevel(self.root)
         self.opt_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         opt_win = self.opt_win
         opt_win.geometry("750x550")
         opt_win.title(f"Settings - {self.game_var.get()}")
@@ -1174,7 +1172,6 @@ class NebulaModManager:
         
         self.share_win = ctk.CTkToplevel(self.root)
         self.share_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         dlg = self.share_win
         dlg.title("Share Load Order")
         dlg.geometry("500x150")
@@ -1283,7 +1280,6 @@ class NebulaModManager:
         if self._focus_if_exists('dl_win'): return
         self.dl_win = ctk.CTkToplevel(self.root)
         self.dl_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         dl_win = self.dl_win
         dl_win.geometry("400x200")
         dl_win.title("Install Local Mod")
@@ -1343,7 +1339,6 @@ class NebulaModManager:
         if self._focus_if_exists('direct_dl_win'): return
         self.direct_dl_win = ctk.CTkToplevel(self.root)
         self.direct_dl_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         dl_win = self.direct_dl_win
         dl_win.geometry("550x300")
         dl_win.title("Direct Download")
@@ -1375,7 +1370,6 @@ class NebulaModManager:
             
         self.wb_win = ctk.CTkToplevel(self.root)
         self.wb_win.transient(self.root)
-        locals()[list(locals().keys())[-1]].transient(self.root)
         self.wb_win.geometry("950x750")
         self.wb_win.title(f"Steam Workshop Browser - {self.game_var.get()}")
         self.wb_win.configure(fg_color=self.bg_color)
