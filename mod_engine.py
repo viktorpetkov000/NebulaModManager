@@ -158,7 +158,16 @@ class ModEngine:
         except Exception as e: print(f"Failed to apply mods: {e}")
         
         exe_path = self.get_exe_path(game)
-        if os.path.exists(exe_path) and exe_path.endswith(".exe"): subprocess.Popen([exe_path])
+        if os.path.exists(exe_path) and exe_path.endswith(".exe"):
+            game_dir = os.path.dirname(exe_path)
+            try:
+                subprocess.Popen([exe_path], cwd=game_dir)
+            except OSError as e:
+                if getattr(e, "winerror", None) == 740:
+                    import ctypes
+                    ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, None, game_dir, 1)
+                else:
+                    raise
         else: raise Exception("Game executable not found.")
 
     def find_conflicts(self, active_mods_data):

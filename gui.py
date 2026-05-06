@@ -146,11 +146,12 @@ class NebulaModManager:
         
         # Setup Installed Mods Right-Click Menu
         self.ctx_menu = tk.Menu(self.root, tearoff=0, bg=self.pane_color, fg="#ffffff", activebackground=self.accent_color, relief="flat", borderwidth=0)
+        self.ctx_menu.add_command(label="Copy Mod Name(s)", command=lambda: self.copy_selected_mod_names(self.installed_tree))
         self.ctx_menu.add_command(label="Open Folder in Explorer", command=self.open_mod_folder)
         self.ctx_menu.add_command(label="View in Workshop", command=self.open_selected_mod_page)
         self.ctx_menu.add_separator()
         self.ctx_menu.add_command(label="Update Mod", command=self.update_selected_mod)
-        self.ctx_menu.add_command(label="Delete Mod Permanently", command=self.delete_selected_mod)
+        self.ctx_menu.add_command(label="Delete Mod(s) Permanently", command=self.delete_selected_mod)
         
         def on_installed_right_click(e):
             row = self.installed_tree.identify_row(e.y)
@@ -158,14 +159,24 @@ class NebulaModManager:
                 if row not in self.installed_tree.selection():
                     self.installed_tree.selection_set(row)
                 self.installed_tree.focus(row)
-                # Show/hide Update Mod conditionally
-                if row in self.available_updates: self.ctx_menu.entryconfig("Update Mod", state="normal")
-                else: self.ctx_menu.entryconfig("Update Mod", state="disabled")
+                
+                sel = self.installed_tree.selection()
+                if len(sel) > 1:
+                    self.ctx_menu.entryconfig("Open Folder in Explorer", state="disabled")
+                    self.ctx_menu.entryconfig("View in Workshop", state="disabled")
+                    self.ctx_menu.entryconfig("Update Mod", state="disabled")
+                else:
+                    self.ctx_menu.entryconfig("Open Folder in Explorer", state="normal")
+                    self.ctx_menu.entryconfig("View in Workshop", state="normal")
+                    if row in self.available_updates: self.ctx_menu.entryconfig("Update Mod", state="normal")
+                    else: self.ctx_menu.entryconfig("Update Mod", state="disabled")
                 self.ctx_menu.post(e.x_root, e.y_root)
                 
         self.installed_tree.bind("<Button-3>", on_installed_right_click)
         self.installed_tree.bind("<<TreeviewSelect>>", lambda e: self.on_mod_select(self.installed_tree))
         self.installed_tree.bind("<Double-1>", lambda e: self.add_to_collection())
+        self.installed_tree.bind("<Control-c>", lambda e: self.copy_selected_mod_names(self.installed_tree))
+        self.installed_tree.bind("<Control-a>", lambda e: self.select_all_tree_items(self.installed_tree))
 
         # MID PANE (Transfer Buttons)
         mid_pane = ctk.CTkFrame(main_frame, fg_color="transparent")
@@ -218,6 +229,22 @@ class NebulaModManager:
         self.collection_tree.bind("<ButtonRelease-1>", self.on_drag_release)
         self.collection_tree.bind("<Double-1>", self.on_collection_double_click)
         self.collection_tree.bind("<<TreeviewSelect>>", lambda e: self.on_mod_select(self.collection_tree))
+
+        self.coll_ctx_menu = tk.Menu(self.root, tearoff=0, bg=self.pane_color, fg="#ffffff", activebackground=self.accent_color, relief="flat", borderwidth=0)
+        self.coll_ctx_menu.add_command(label="Copy Mod Name(s)", command=lambda: self.copy_selected_mod_names(self.collection_tree))
+        self.coll_ctx_menu.add_command(label="Remove from Collection", command=self.remove_from_collection)
+
+        def on_collection_right_click(e):
+            row = self.collection_tree.identify_row(e.y)
+            if row:
+                if row not in self.collection_tree.selection():
+                    self.collection_tree.selection_set(row)
+                self.collection_tree.focus(row)
+                self.coll_ctx_menu.post(e.x_root, e.y_root)
+
+        self.collection_tree.bind("<Button-3>", on_collection_right_click)
+        self.collection_tree.bind("<Control-c>", lambda e: self.copy_selected_mod_names(self.collection_tree))
+        self.collection_tree.bind("<Control-a>", lambda e: self.select_all_tree_items(self.collection_tree))
 
         # MOD DETAILS PANE
         self.details_frame = ctk.CTkFrame(self.root, height=130, cursor="hand2", fg_color=self.pane_color, border_width=1, border_color="#1E293B")
@@ -929,21 +956,36 @@ class NebulaModManager:
         game, coll = self.game_var.get(), self.current_collection_var.get()
         if not coll: return
         mod_list = self.db.get_collection_mods(game, coll)
+        
         def get_weight(rel_path):
             data = self.installed_mods_data.get(rel_path)
-            if not data: return 50
-            try:
-                with open(data["file_path"], 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read().lower()
-                    if "total conversion" in content: return 10
-                    if "ui" in content: return 20
-                    if "patch" in content or "fix" in content: return 90
-            except Exception: pass
-            return 50
+            if not data: return (50, "")
+            
+            name = data.get("name", "").lower()
+            
+            # 1. Frameworks & Utilities (Weight 10)
+            if any(kw in name for kw in ["framework", "utility", "utilities", "library", "core", "tiny outliner", "general fixes"]):
+                return (10, name)
+                
+            # 5. Compatibility Patches (Weight 90) - Checked before UI to catch "UI Overhaul + Mod"
+            if any(kw in name for kw in [" patch", "patch ", "patch]", " + ", "compatch", "universal resource patch", "fix "]):
+                return (90, name)
+                
+            # 4. Interface & Visuals (Weight 70)
+            if any(kw in name for kw in ["ui ", "ui overhaul", "interface", "visual", "graphics", "beautiful", "menu", "topbar", "outliner"]):
+                return (70, name)
+                
+            # 2. Large Content Overhauls (Weight 30)
+            if any(kw in name for kw in ["total conversion", "overhaul", "expansion", "gigastructural", "nsc", "planetary diversity", "real space"]):
+                return (30, name)
+                
+            # 3. Flavor, Events, & Mechanics (Weight 50 - Default)
+            return (50, name)
+
         mod_list.sort(key=get_weight)
         self.db.save_collection_mods(game, coll, mod_list)
         self.refresh_collection_view()
-        self.set_status("Collection auto-sorted based on simple heuristics.", color="#10B981")
+        self.set_status("Collection smartly auto-sorted based on 5-tier heuristic.", color="#10B981")
 
     def import_from_save(self):
         save_path = filedialog.askopenfilename(title="Select Save File", filetypes=[("Save Files", "*.sav")])
@@ -986,15 +1028,49 @@ class NebulaModManager:
     def delete_selected_mod(self):
         selected = self.installed_tree.selection()
         if not selected: return
-        rel_path = selected[0]
-        if str(rel_path).startswith("dl_"): return
         
-        data = self.installed_mods_data.get(rel_path)
-        if data and messagebox.askyesno("Delete", f"Permanently delete '{data['name']}'?"):
-            if os.path.exists(data["file_path"]): os.remove(data["file_path"])
-            if os.path.exists(data["content_path"]): shutil.rmtree(data["content_path"]) if os.path.isdir(data["content_path"]) else os.remove(data["content_path"])
-            self.set_status(f"Deleted mod: {data['name']}")
+        valid_targets = [p for p in selected if not str(p).startswith("dl_")]
+        if not valid_targets: return
+        
+        if len(valid_targets) == 1:
+            data = self.installed_mods_data.get(valid_targets[0])
+            msg = f"Permanently delete '{data['name']}'?" if data else "Delete selected mod?"
+        else:
+            msg = f"Permanently delete {len(valid_targets)} selected mods?"
+            
+        if messagebox.askyesno("Delete", msg):
+            count = 0
+            for rel_path in valid_targets:
+                data = self.installed_mods_data.get(rel_path)
+                if data:
+                    try:
+                        if os.path.exists(data["file_path"]): os.remove(data["file_path"])
+                        if os.path.exists(data["content_path"]): shutil.rmtree(data["content_path"]) if os.path.isdir(data["content_path"]) else os.remove(data["content_path"])
+                        count += 1
+                    except: pass
+            self.set_status(f"Deleted {count} mods")
             self.refresh_installed_mods()
+
+    def copy_selected_mod_names(self, tree=None):
+        if not tree: return
+        selected = tree.selection()
+        if not selected: return
+        
+        names = []
+        for rel_path in selected:
+            if str(rel_path).startswith("dl_"): continue
+            data = self.installed_mods_data.get(rel_path)
+            if data: names.append(data.get("name", "Unknown Mod"))
+            
+        if names:
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(names))
+            self.set_status(f"Copied {len(names)} mod name(s) to clipboard.", color="#10B981")
+
+    def select_all_tree_items(self, tree):
+        items = tree.get_children()
+        if items:
+            tree.selection_set(items)
 
     # --- MOD TOOLS & OPTIONS ---
     def open_tools_menu(self):
