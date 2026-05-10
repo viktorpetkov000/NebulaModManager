@@ -48,6 +48,12 @@ GAMES_MAP = {
         "app_id": "203770",
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Crusader Kings II", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings II\ck2.exe"
+    },
+    "Oxygen Not Included": {
+        "id": "oni",
+        "app_id": "457140",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Klei", "OxygenNotIncluded", "mods", "local"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\OxygenNotIncluded\OxygenNotIncluded.exe"
     }
 }
 

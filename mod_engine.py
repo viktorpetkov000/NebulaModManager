@@ -42,27 +42,56 @@ class ModEngine:
     # --- AUTO-REPAIR & SCANNING ---
     def auto_generate_root_mods(self, target_path):
         if not os.path.exists(target_path): return
+        folder_name = os.path.basename(target_path)
         for item in os.listdir(target_path):
             item_path = os.path.join(target_path, item)
-            if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "descriptor.mod")):
+            if os.path.isdir(item_path):
                 root_mod = os.path.join(target_path, f"{item}.mod")
                 if not os.path.exists(root_mod):
-                    try:
-                        with open(os.path.join(item_path, "descriptor.mod"), 'r', encoding='utf-8', errors='ignore') as src: lines = src.readlines()
-                        new_lines, has_path = [], False
-                        for line in lines:
-                            if line.strip().startswith('archive='): continue
-                            elif line.strip().startswith('path='):
-                                new_lines.append(f'path="mod/{item}"\n')
-                                has_path = True
-                            else: new_lines.append(line)
-                        if not has_path: new_lines.append(f'path="mod/{item}"\n')
-                        with open(root_mod, 'w', encoding='utf-8') as dst: dst.writelines(new_lines)
-                    except Exception: pass
+                    if os.path.exists(os.path.join(item_path, "descriptor.mod")):
+                        try:
+                            with open(os.path.join(item_path, "descriptor.mod"), 'r', encoding='utf-8', errors='ignore') as src: lines = src.readlines()
+                            new_lines, has_path = [], False
+                            for line in lines:
+                                if line.strip().startswith('archive='): continue
+                                elif line.strip().startswith('path='):
+                                    new_lines.append(f'path="{folder_name}/{item}"\n')
+                                    has_path = True
+                                else: new_lines.append(line)
+                            if not has_path: new_lines.append(f'path="{folder_name}/{item}"\n')
+                            with open(root_mod, 'w', encoding='utf-8') as dst: dst.writelines(new_lines)
+                        except Exception: pass
+                    elif os.path.exists(os.path.join(item_path, "mod_info.yaml")) or os.path.exists(os.path.join(item_path, "modinfo.yaml")) or item.startswith("ugc_"):
+                        try:
+                            title = item
+                            version = "Any"
+                            yaml_file = "mod_info.yaml" if os.path.exists(os.path.join(item_path, "mod_info.yaml")) else "modinfo.yaml"
+                            if os.path.exists(os.path.join(item_path, yaml_file)):
+                                with open(os.path.join(item_path, yaml_file), 'r', encoding='utf-8', errors='ignore') as src:
+                                    for line in src:
+                                        if line.strip().startswith('title:'): title = line.split(':', 1)[1].strip().strip('\"\'')
+                                        elif line.strip().startswith('version:'): version = line.split(':', 1)[1].strip().strip('\"\'')
+                            
+                            if (title == item or title.strip() == "") and item.startswith("ugc_"):
+                                wid = item[4:]
+                                try:
+                                    api_res = self.fetch_api_details([wid], cache_hours=24.0)
+                                    if str(wid) in api_res and api_res[str(wid)].get("title"):
+                                        title = api_res[str(wid)]["title"]
+                                except Exception: pass
+                            
+                            with open(root_mod, 'w', encoding='utf-8') as dst:
+                                dst.write(f'name="{title}"\n')
+                                dst.write(f'supported_version="{version}"\n')
+                                dst.write(f'path="{folder_name}/{item}"\n')
+                                if item.startswith("ugc_"):
+                                    dst.write(f'remote_file_id="{item[4:]}"\n')
+                        except Exception: pass
 
     def repair_mod_paths(self, target_path):
         if not os.path.exists(target_path): return
         game_base_dir = os.path.dirname(target_path)
+        folder_name = os.path.basename(target_path)
         for file in os.listdir(target_path):
             if file.endswith(".mod"):
                 mod_file = os.path.join(target_path, file)
@@ -73,8 +102,8 @@ class ModEngine:
                     if needs_repair:
                         base_name = file[:-4]
                         expected_line = None
-                        if os.path.isdir(os.path.join(target_path, base_name)): expected_line = f'path="mod/{base_name}"\n'
-                        elif base_name.startswith("ugc_") and os.path.isdir(os.path.join(target_path, base_name[4:])): expected_line = f'path="mod/{base_name[4:]}"\n'
+                        if os.path.isdir(os.path.join(target_path, base_name)): expected_line = f'path="{folder_name}/{base_name}"\n'
+                        elif base_name.startswith("ugc_") and os.path.isdir(os.path.join(target_path, base_name[4:])): expected_line = f'path="{folder_name}/{base_name[4:]}"\n'
                         if expected_line:
                             new_lines, has_path = [], False
                             for line in lines:
@@ -86,9 +115,23 @@ class ModEngine:
                             with open(mod_file, 'w', encoding='utf-8') as f: f.writelines(new_lines)
                 except Exception: pass
 
-    def parse_mod_file(self, mod_file_path, rel_path, game_base_dir, mtime=0):
+    def parse_mod_file(self, mod_file_path, rel_path, game_base_dir, mtime=0, is_oni=False):
         name, version, content_relative_path, dependencies, remote_id = "Unknown Mod", "Any", "", [], None
         try:
+            if is_oni:
+                mod_dir = os.path.dirname(mod_file_path) if os.path.isfile(mod_file_path) else mod_file_path
+                name = rel_path
+                remote_id = rel_path.replace("ugc_", "") if rel_path.startswith("ugc_") else None
+                try:
+                    yaml_path = os.path.join(mod_dir, "mod.yaml")
+                    if os.path.exists(yaml_path):
+                        with open(yaml_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            for line in f:
+                                if line.strip().startswith("title:"):
+                                    name = line.split(":", 1)[1].strip().strip('\"\'')
+                except Exception: pass
+                return rel_path, {"name": name, "version": version, "file_path": mod_dir, "content_path": mod_dir, "dependencies": dependencies, "remote_id": remote_id}, mtime
+
             with open(mod_file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
                 for line in content.split('\n'):
@@ -117,8 +160,26 @@ class ModEngine:
         installed_data = {}
         to_parse = []
         
+        is_oni = game == "Oxygen Not Included"
+        
         for file in os.listdir(target_path):
-            if file.endswith(".mod"):
+            if is_oni:
+                if os.path.isdir(os.path.join(target_path, file)):
+                    mod_file_path = os.path.join(target_path, file, "mod.yaml")
+                    if not os.path.exists(mod_file_path):
+                        mod_file_path = os.path.join(target_path, file)
+                    rel_path = file
+                    try:
+                        mtime = os.path.getmtime(mod_file_path)
+                        if rel_path in cached_mods and cached_mods[rel_path][0] == mtime:
+                            try:
+                                installed_data[rel_path] = json.loads(cached_mods[rel_path][1])
+                                new_cache[rel_path] = cached_mods[rel_path]
+                                continue
+                            except: pass
+                        to_parse.append((mod_file_path, rel_path, game_base_dir, mtime, True))
+                    except Exception: pass
+            elif file.endswith(".mod"):
                 mod_file_path = os.path.join(target_path, file)
                 rel_path = f"mod/{file}"
                 try:
@@ -129,7 +190,7 @@ class ModEngine:
                             new_cache[rel_path] = cached_mods[rel_path]
                             continue
                         except: pass
-                    to_parse.append((mod_file_path, rel_path, game_base_dir, mtime))
+                    to_parse.append((mod_file_path, rel_path, game_base_dir, mtime, False))
                 except Exception: pass
         
         if to_parse:
@@ -152,10 +213,51 @@ class ModEngine:
     def launch_game(self, game, coll_name):
         mod_paths = self.db.get_collection_mods(game, coll_name)
         target_path = self.get_mod_path(game)
-        dlc_load_path = os.path.join(os.path.dirname(target_path), "dlc_load.json")
-        try:
-            with open(dlc_load_path, 'w') as f: json.dump({"disabled_dlcs": [], "enabled_mods": mod_paths}, f, indent=4)
-        except Exception as e: print(f"Failed to apply mods: {e}")
+        
+        if game == "Oxygen Not Included":
+            mods_json_path = os.path.join(os.path.dirname(target_path), "mods.json")
+            existing_mods = {}
+            if os.path.exists(mods_json_path):
+                try:
+                    with open(mods_json_path, 'r') as f:
+                        data = json.load(f)
+                        for m in data.get("mods", []):
+                            mod_id = m.get("label", {}).get("id")
+                            if mod_id:
+                                existing_mods[mod_id] = m
+                except: pass
+                
+            active_ids = {os.path.basename(p).replace(".mod", "") for p in mod_paths}
+            
+            # Update or create mod entries
+            for mod_id in existing_mods:
+                existing_mods[mod_id]["enabled"] = mod_id in active_ids
+                
+            for active_id in active_ids:
+                if active_id not in existing_mods:
+                    existing_mods[active_id] = {
+                        "label": {
+                            "id": active_id,
+                            "version": 0,
+                            "distribution_platform": 0,
+                            "title": active_id
+                        },
+                        "status": 1,
+                        "enabled": True,
+                        "enabledForDlc": ["", "EXPANSION1_ID"],
+                        "crash_count": 0,
+                        "reinstall_path": f"local/{active_id}"
+                    }
+            
+            try:
+                with open(mods_json_path, 'w') as f: 
+                    json.dump({"version": 1, "mods": list(existing_mods.values())}, f, indent=4)
+            except Exception as e: print(f"Failed to apply mods: {e}")
+        else:
+            dlc_load_path = os.path.join(os.path.dirname(target_path), "dlc_load.json")
+            try:
+                with open(dlc_load_path, 'w') as f: json.dump({"disabled_dlcs": [], "enabled_mods": mod_paths}, f, indent=4)
+            except Exception as e: print(f"Failed to apply mods: {e}")
         
         exe_path = self.get_exe_path(game)
         if os.path.exists(exe_path) and exe_path.endswith(".exe"):
@@ -291,7 +393,12 @@ class ModEngine:
         target_path = self.get_mod_path(game)
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(target_path)
-            return [f"mod/{name}" for name in zip_ref.namelist() if name.endswith(".mod") and "/" not in name]
+            if game == "Oxygen Not Included":
+                return [name for name in zip_ref.namelist() if name.endswith("/mod_info.yaml") or name.endswith("/mod.yaml")] # Actually just return the top level dirs.
+                # Better:
+                return list({name.split('/')[0] for name in zip_ref.namelist() if '/' in name})
+            else:
+                return [f"mod/{name}" for name in zip_ref.namelist() if name.endswith(".mod") and "/" not in name]
 
     # --- STEAM API WITH CACHING ---
     def fetch_api_details(self, wids, cache_hours=4.0):
