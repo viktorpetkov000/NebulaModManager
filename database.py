@@ -60,6 +60,12 @@ GAMES_MAP = {
         "app_id": "457140",
         "default_mod": os.path.join(USER_HOME, "Documents", "Klei", "OxygenNotIncluded", "mods", "local"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\OxygenNotIncluded\OxygenNotIncluded.exe"
+    },
+    "Skyrim Special Edition": {
+        "id": "skyrimse",
+        "app_id": "489830",
+        "default_mod": os.path.join(USER_HOME, "Documents", "My Games", "Skyrim Special Edition", "Mods"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\SkyrimSE.exe"
     }
 }
 

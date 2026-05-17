@@ -53,6 +53,16 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write(f"VERSION={new_version}\n")
 
+      - name: Generate Changelog
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            git log --pretty=format:"- %s" > changelog.txt
+          else
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" > changelog.txt
+          fi
+
       - name: Commit Version Bump to GitHub
         shell: bash
         run: |
@@ -86,6 +96,7 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}
           name: Release ${{ env.VERSION }}
+          body_path: changelog.txt
           files: dist/NebulaModManager.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
