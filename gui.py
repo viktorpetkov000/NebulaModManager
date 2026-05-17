@@ -381,6 +381,8 @@ class NebulaModManager:
                 bat_path = os.path.join(os.environ.get('TEMP', ''), 'nebula_update.bat')
                 with open(bat_path, 'w') as f:
                     f.write(f'@echo off\n'
+                            f'set _MEIPASS2=\n'
+                            f'set _MEIPASS=\n'
                             f'timeout /t 2 /nobreak > NUL\n'
                             f':loop\n'
                             f'del "{exe_path}"\n'
