@@ -49,6 +49,12 @@ GAMES_MAP = {
         "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Crusader Kings II", "mod"),
         "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings II\ck2.exe"
     },
+    "Europa V": {
+        "id": "eu5",
+        "app_id": "",
+        "default_mod": os.path.join(USER_HOME, "Documents", "Paradox Interactive", "Europa Universalis V", "mod"),
+        "default_exe": r"C:\Program Files (x86)\Steam\steamapps\common\Europa Universalis V\binaries\eu5.exe"
+    },
     "Oxygen Not Included": {
         "id": "oni",
         "app_id": "457140",
