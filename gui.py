@@ -315,24 +315,90 @@ class NebulaModManager:
                     latest_version = data.get("tag_name", "")
                     
                     if latest_version and latest_version != CURRENT_VERSION:
-                        def parse_ver(v):
-                            return [int(x) for x in v.lstrip('v').split('.') if x.isdigit()]
-                            
-                        try:
-                            if parse_ver(latest_version) > parse_ver(CURRENT_VERSION):
-                                self.root.after(0, lambda: self.prompt_app_update(latest_version, data.get("html_url")))
-                        except Exception:
-                            if latest_version != CURRENT_VERSION:
-                                self.root.after(0, lambda: self.prompt_app_update(latest_version, data.get("html_url")))
+                        download_url = None
+                        for asset in data.get("assets", []):
+                            if asset.get("name", "").endswith(".exe"):
+                                download_url = asset.get("browser_download_url")
+                                break
+                                
+                        if download_url:
+                            def parse_ver(v):
+                                return [int(x) for x in v.lstrip('v').split('.') if x.isdigit()]
+                                
+                            try:
+                                if parse_ver(latest_version) > parse_ver(CURRENT_VERSION):
+                                    self.root.after(0, lambda: self.prompt_app_update(latest_version, download_url))
+                            except Exception:
+                                if latest_version != CURRENT_VERSION:
+                                    self.root.after(0, lambda: self.prompt_app_update(latest_version, download_url))
             except Exception:
                 pass
         threading.Thread(target=worker, daemon=True).start()
 
-    def prompt_app_update(self, latest_version, url):
+    def prompt_app_update(self, latest_version, download_url):
         clean_ver = latest_version.lstrip('v')
-        if messagebox.askyesno("Update Available", f"Version {clean_ver} is available! Would you like to update?"):
-            if url:
-                webbrowser.open(url)
+        
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title("Nebula Mod Manager Update")
+        dlg.geometry("400x150")
+        dlg.attributes("-topmost", True)
+        dlg.resizable(False, False)
+        
+        lbl = ctk.CTkLabel(dlg, text=f"Downloading Nebula Mod Manager v{clean_ver}...", font=("Segoe UI", 14, "bold"))
+        lbl.pack(pady=(25, 10))
+        
+        prog = ctk.CTkProgressBar(dlg, width=300, progress_color=self.accent_color)
+        prog.pack(pady=10)
+        prog.set(0)
+        
+        def download_worker():
+            try:
+                import sys
+                if not getattr(sys, 'frozen', False):
+                    self.root.after(0, lambda: lbl.configure(text="Update skipped in development mode."))
+                    self.root.after(2000, dlg.destroy)
+                    return
+                    
+                exe_path = sys.executable
+                new_exe_path = exe_path + ".new"
+                
+                req = urllib.request.Request(download_url, headers={'User-Agent': 'NebulaModManager'})
+                with urllib.request.urlopen(req) as response, open(new_exe_path, 'wb') as out_file:
+                    total_size = int(response.info().get('Content-Length', 0))
+                    downloaded = 0
+                    chunk_size = 8192
+                    while True:
+                        buffer = response.read(chunk_size)
+                        if not buffer:
+                            break
+                        downloaded += len(buffer)
+                        out_file.write(buffer)
+                        if total_size > 0:
+                            self.root.after(0, lambda p=downloaded/total_size: prog.set(p))
+                            
+                self.root.after(0, lambda: lbl.configure(text="Restarting..."))
+                
+                bat_path = os.path.join(os.environ.get('TEMP', ''), 'nebula_update.bat')
+                with open(bat_path, 'w') as f:
+                    f.write(f'@echo off\n'
+                            f'timeout /t 2 /nobreak > NUL\n'
+                            f':loop\n'
+                            f'del "{exe_path}"\n'
+                            f'if exist "{exe_path}" (\n'
+                            f'    timeout /t 1 /nobreak > NUL\n'
+                            f'    goto loop\n'
+                            f')\n'
+                            f'move /Y "{new_exe_path}" "{exe_path}"\n'
+                            f'start "" "{exe_path}"\n'
+                            f'del "%~f0"\n')
+                            
+                os.startfile(bat_path)
+                os._exit(0)
+            except Exception as e:
+                self.root.after(0, lambda: lbl.configure(text=f"Update failed: {str(e)[:40]}"))
+                self.root.after(3000, dlg.destroy)
+                
+        threading.Thread(target=download_worker, daemon=True).start()
 
     def clear_mod_details(self):
         self.lbl_mod_name.configure(text="No Mod Selected", text_color="#F8FAFC")
