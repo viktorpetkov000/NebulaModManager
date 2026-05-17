@@ -22,7 +22,7 @@ except ImportError:
     pystray = None
 from database import GAMES_MAP
 
-CURRENT_VERSION = "v2.3.0"
+CURRENT_VERSION = "v2.4.0"
 
 class NebulaModManager:
     def __init__(self, root, db, engine):
