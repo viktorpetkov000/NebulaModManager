@@ -6,6 +6,7 @@ import os
 import shutil
 import io
 import urllib.request
+import json
 import uuid
 import concurrent.futures
 import datetime
@@ -20,6 +21,8 @@ try:
 except ImportError:
     pystray = None
 from database import GAMES_MAP
+
+CURRENT_VERSION = "v2.0.0"
 
 class NebulaModManager:
     def __init__(self, root, db, engine):
@@ -74,6 +77,8 @@ class NebulaModManager:
         # Initial Auto-Check for Updates
         if self.db.get_setting("auto_update_check") != "False":
             self.root.after(1500, self.check_for_updates)
+            
+        self.root.after(2000, self.check_app_updates)
 
     def _focus_if_exists(self, win_attr):
         win = getattr(self, win_attr, None)
@@ -297,6 +302,37 @@ class NebulaModManager:
 
     def set_status(self, msg, color="#E2E8F0"):
         self.status_bar.configure(text=msg, text_color=color)
+
+    def check_app_updates(self):
+        def worker():
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/viktorpetkov000/NebulaModManager/releases/latest",
+                    headers={'User-Agent': 'NebulaModManager'}
+                )
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode())
+                    latest_version = data.get("tag_name", "")
+                    
+                    if latest_version and latest_version != CURRENT_VERSION:
+                        def parse_ver(v):
+                            return [int(x) for x in v.lstrip('v').split('.') if x.isdigit()]
+                            
+                        try:
+                            if parse_ver(latest_version) > parse_ver(CURRENT_VERSION):
+                                self.root.after(0, lambda: self.prompt_app_update(latest_version, data.get("html_url")))
+                        except Exception:
+                            if latest_version != CURRENT_VERSION:
+                                self.root.after(0, lambda: self.prompt_app_update(latest_version, data.get("html_url")))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def prompt_app_update(self, latest_version, url):
+        clean_ver = latest_version.lstrip('v')
+        if messagebox.askyesno("Update Available", f"Version {clean_ver} is available! Would you like to update?"):
+            if url:
+                webbrowser.open(url)
 
     def clear_mod_details(self):
         self.lbl_mod_name.configure(text="No Mod Selected", text_color="#F8FAFC")

@@ -1,0 +1,42 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v1.0.0, v2.0.0, etc.
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write  # Necessary to create releases and upload assets
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Generate Icon
+        run: python create_icon.py
+
+      - name: Build with PyInstaller
+        run: |
+          python -m PyInstaller --noconsole --onefile --name "NebulaModManager" --clean -i "icon.ico" --add-data "icon.ico;." --collect-all customtkinter main.py
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/NebulaModManager.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
