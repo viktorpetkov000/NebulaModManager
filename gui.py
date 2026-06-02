@@ -528,7 +528,9 @@ class NebulaModManager:
         if not wid_match: return
         wid = wid_match.group(1)
         
-        new_rel_path = next((p for p, d in self.installed_mods_data.items() if str(d.get("remote_id")) == str(wid)), None)
+        new_rel_path = next((p for p, d in self.installed_mods_data.items() if str(d.get("remote_id")) == str(wid) and p != task.get("replace_rel_path")), None)
+        if not new_rel_path:
+            new_rel_path = next((p for p, d in self.installed_mods_data.items() if str(d.get("remote_id")) == str(wid)), None)
         
         # 2. Globally update any placeholder 'ugc_{wid}' or old mod paths inside ALL collections
         if new_rel_path:
@@ -1469,9 +1471,9 @@ class NebulaModManager:
         ctk.CTkLabel(dl_win, text="Install a Mod from your PC", font=("Segoe UI", 16, "bold"), text_color=self.accent_color).pack(pady=(20, 10))
         
         def install_zip():
-            file_path = filedialog.askopenfilename(title="Select Mod Archive", filetypes=[("Zip Files", "*.zip"), ("All Files", "*.*")])
-            if file_path:
-                self.install_local_archive(file_path)
+            file_paths = filedialog.askopenfilenames(title="Select Mod Archive(s)", filetypes=[("Zip Files", "*.zip"), ("All Files", "*.*")])
+            if file_paths:
+                self.install_local_archive(file_paths)
                 dl_win.destroy()
                 
         def install_folder():
@@ -1485,17 +1487,40 @@ class NebulaModManager:
         ctk.CTkButton(btn_f, text="📦 Install from .ZIP", height=40, fg_color=self.pane_color, hover_color="#1E293B", command=install_zip).pack(side="left", padx=10)
         ctk.CTkButton(btn_f, text="📁 Install from Folder", height=40, fg_color=self.pane_color, hover_color="#1E293B", command=install_folder).pack(side="left", padx=10)
 
-    def install_local_archive(self, file_path):
+    def install_local_archive(self, file_paths):
+        if isinstance(file_paths, str):
+            file_paths = [file_paths]
+            
         target_path = self.engine.get_mod_path(self.game_var.get())
-        self.set_status(f"Installing {os.path.basename(file_path)}...", color="#F59E0B")
+        if len(file_paths) == 1:
+            self.set_status(f"Installing {os.path.basename(file_paths[0])}...", color="#F59E0B")
+        else:
+            self.set_status(f"Installing {len(file_paths)} archives...", color="#F59E0B")
+            
         def task():
-            try:
-                with zipfile.ZipFile(file_path, 'r') as z:
-                    z.extractall(target_path)
-                self.root.after(0, lambda: self.set_status("Local mod installed successfully!", color="#10B981"))
-                self.root.after(0, self.refresh_installed_mods)
-            except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"Installation failed: {e}", color="#EF4444"))
+            success_count = 0
+            fail_count = 0
+            last_err = None
+            for file_path in file_paths:
+                try:
+                    with zipfile.ZipFile(file_path, 'r') as z:
+                        z.extractall(target_path)
+                    success_count += 1
+                except Exception as e:
+                    fail_count += 1
+                    last_err = e
+                    
+            if fail_count == 0:
+                if len(file_paths) == 1:
+                    self.root.after(0, lambda: self.set_status("Local mod installed successfully!", color="#10B981"))
+                else:
+                    self.root.after(0, lambda: self.set_status(f"Installed {success_count} local mods successfully!", color="#10B981"))
+            elif success_count == 0:
+                self.root.after(0, lambda: self.set_status(f"Installation failed: {last_err}", color="#EF4444"))
+            else:
+                self.root.after(0, lambda: self.set_status(f"Installed {success_count} mods, {fail_count} failed. Last error: {last_err}", color="#F59E0B"))
+                
+            self.root.after(0, self.refresh_installed_mods)
         self.executor.submit(task)
         
     def install_local_folder(self, folder_path):

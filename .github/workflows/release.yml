@@ -10,6 +10,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      VERSION: ""
 
     steps:
       - name: Checkout Code
